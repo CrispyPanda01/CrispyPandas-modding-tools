@@ -1535,3 +1535,399 @@ cleanup:
     changes_free(&changes);
     return success;
 }
+
+static int next_state_id(const Hoi4Map *map)
+{
+    int id;
+    int highest = 0;
+    for (id = 1; id < HOI4_MAX_STATES; ++id)
+        if (map->states[id]) highest = id;
+    return highest + 1 < HOI4_MAX_STATES ? highest + 1 : 0;
+}
+
+static char *build_state_localization(const char *existing,
+                                      const char *key,
+                                      int state_id,
+                                      char *error,
+                                      size_t error_size)
+{
+    TextBuffer output = {0};
+    char entry[256];
+    char needle[80];
+    size_t length = existing ? strlen(existing) : 0;
+    snprintf(needle, sizeof(needle), "\n %s:", key);
+    if (existing && (strstr(existing, needle)
+        || (strncmp(existing, key, strlen(key)) == 0
+            && existing[strlen(key)] == ':'))) {
+        snprintf(error, error_size, "La clé de localisation %s existe déjà.", key);
+        return NULL;
+    }
+    if (existing && length) {
+        if (!buffer_append_n(&output, existing, length)
+            || (existing[length - 1] != '\n' && !buffer_append(&output, "\r\n"))) {
+            free(output.data);
+            return NULL;
+        }
+    } else if (!buffer_append(&output, "\xEF\xBB\xBF" "l_english:\r\n")) {
+        free(output.data);
+        return NULL;
+    }
+    snprintf(entry, sizeof(entry), " %s:0 \"New State %d\"\r\n", key, state_id);
+    if (!buffer_append(&output, entry)) {
+        free(output.data);
+        return NULL;
+    }
+    return output.data;
+}
+
+bool province_state_create_execute(const Hoi4Map *map,
+                                   const char *mod_root,
+                                   const uint8_t *selected_provinces,
+                                   ProvinceStateCreateResult *result)
+{
+    uint8_t *moving = NULL;
+    uint8_t *affected_regions = NULL;
+    uint16_t *new_region = NULL;
+    int *new_provinces = NULL;
+    StatePlanList plans = {0};
+    AssetSet incoming = {0};
+    ChangeList changes = {0};
+    char states_dir[CP_PATH_MAX], regions_dir[CP_PATH_MAX];
+    char localization_dir[CP_PATH_MAX], localization_path[CP_PATH_MAX];
+    const Hoi4State *primary_state = NULL;
+    size_t moving_count = 0;
+    size_t i, p;
+    int new_state_id;
+    int new_state_region;
+    bool success = false;
+
+    memset(result, 0, sizeof(*result));
+    if (!map || !mod_root || !mod_root[0] || !selected_provinces) {
+        snprintf(result->error, sizeof(result->error),
+                 "Paramètres de création d'état invalides.");
+        return false;
+    }
+    new_state_id = next_state_id(map);
+    if (!new_state_id) {
+        snprintf(result->error, sizeof(result->error),
+                 "Aucun identifiant d'état libre n'est disponible.");
+        return false;
+    }
+    moving = calloc(HOI4_MAX_PROVINCES, 1);
+    affected_regions = calloc(HOI4_MAX_STATES, 1);
+    new_region = calloc(HOI4_MAX_PROVINCES, sizeof(*new_region));
+    new_provinces = malloc(HOI4_MAX_PROVINCES * sizeof(*new_provinces));
+    if (!moving || !affected_regions || !new_region || !new_provinces) {
+        snprintf(result->error, sizeof(result->error),
+                 "Mémoire insuffisante pour préparer le nouvel état.");
+        goto cleanup;
+    }
+    for (p = 1; p < HOI4_MAX_PROVINCES; ++p) {
+        const Hoi4Province *province;
+        const Hoi4State *source;
+        if (!selected_provinces[p]) continue;
+        province = hoi4_map_province(map, (int)p);
+        if (!province || province->type != HOI4_PROVINCE_LAND || !province->state_id) {
+            snprintf(result->error, sizeof(result->error),
+                     "La province %zu n'appartient à aucun état terrestre.", p);
+            goto cleanup;
+        }
+        source = hoi4_map_state(map, province->state_id);
+        if (!source || !state_plan_add(&plans, source->id, source, false)) {
+            snprintf(result->error, sizeof(result->error),
+                     "État source invalide pour la province %zu.", p);
+            goto cleanup;
+        }
+        moving[p] = 1;
+        new_provinces[moving_count++] = (int)p;
+    }
+    if (!moving_count) {
+        snprintf(result->error, sizeof(result->error),
+                 "Sélectionnez au moins une province terrestre avant de créer un état.");
+        goto cleanup;
+    }
+    qsort(new_provinces, moving_count, sizeof(new_provinces[0]), compare_ints);
+
+    {
+        size_t best_count = 0;
+        for (i = 0; i < plans.count; ++i) {
+            StatePlan *plan = &plans.items[i];
+            size_t selected_from_state = 0;
+            for (p = 0; p < plan->state->province_count; ++p)
+                if (moving[plan->state->provinces[p]]) selected_from_state++;
+            if (selected_from_state > best_count
+                || (selected_from_state == best_count
+                    && (!primary_state || plan->id < primary_state->id))) {
+                primary_state = plan->state;
+                best_count = selected_from_state;
+            }
+        }
+    }
+
+    for (i = 0; i < plans.count; ++i) {
+        StatePlan *plan = &plans.items[i];
+        plan->provinces = malloc(plan->state->province_count * sizeof(*plan->provinces));
+        if (!plan->provinces) {
+            snprintf(result->error, sizeof(result->error),
+                     "Mémoire insuffisante pour l'état %d.", plan->id);
+            goto cleanup;
+        }
+        for (p = 0; p < plan->state->province_count; ++p) {
+            int province = plan->state->provinces[p];
+            if (!moving[province]) plan->provinces[plan->province_count++] = province;
+        }
+        if (!plan->province_count) {
+            snprintf(result->error, sizeof(result->error),
+                     "La création viderait complètement l'état %d; opération annulée.",
+                     plan->id);
+            goto cleanup;
+        }
+        qsort(plan->provinces, plan->province_count,
+              sizeof(plan->provinces[0]), compare_ints);
+    }
+
+    if (!ensure_transfer_directory(mod_root, "history", "states",
+                                   states_dir, sizeof(states_dir),
+                                   result->error, sizeof(result->error))
+        || !ensure_transfer_directory(mod_root, "map", "strategicregions",
+                                      regions_dir, sizeof(regions_dir),
+                                      result->error, sizeof(result->error))
+        || !ensure_transfer_directory(mod_root, "localisation", "english",
+                                      localization_dir, sizeof(localization_dir),
+                                      result->error, sizeof(result->error))) goto cleanup;
+
+    for (i = 0; i < plans.count; ++i) {
+        StatePlan *plan = &plans.items[i];
+        char *input;
+        char *output = NULL;
+        char target_path[CP_PATH_MAX];
+        StateDocument document;
+        input = read_entire_file(plan->state->source,
+                                 result->error, sizeof(result->error));
+        if (!input) goto cleanup;
+        if (!parse_state_document(input, &document,
+                                  result->error, sizeof(result->error))) {
+            free(input);
+            state_document_free(&document);
+            goto cleanup;
+        }
+        if (!check_unsupported_nested_assets(&document, moving,
+                                             result->error, sizeof(result->error))
+            || !collect_moved_assets(&document.assets, moving, &incoming)
+            || !transform_state_document(&document,
+                                         plan->provinces, plan->province_count,
+                                         moving, NULL, &output,
+                                         result->error, sizeof(result->error))) {
+            if (!result->error[0])
+                snprintf(result->error, sizeof(result->error),
+                         "Échec de transformation de l'état %d.", plan->id);
+            state_document_free(&document);
+            free(input);
+            free(output);
+            goto cleanup;
+        }
+        state_document_free(&document);
+        free(input);
+        if (!target_for_source(states_dir, plan->state->source,
+                               target_path, sizeof(target_path))
+            || !change_add(&changes, plan->state->source, target_path, output,
+                           result->error, sizeof(result->error))) {
+            free(output);
+            goto cleanup;
+        }
+    }
+
+    {
+        char template_text[2048];
+        char new_path[CP_PATH_MAX];
+        char filename[96];
+        char *output = NULL;
+        StateDocument document;
+        int written;
+        const char *owner = primary_state && primary_state->owner[0]
+            ? primary_state->owner : NULL;
+        memset(&document, 0, sizeof(document));
+        written = snprintf(template_text, sizeof(template_text),
+            "state = {\r\n"
+            "\tid = %d\r\n"
+            "\tname = \"STATE_%d\"\r\n"
+            "\tmanpower = 0\r\n"
+            "\tstate_category = rural\r\n"
+            "\thistory = {\r\n"
+            "%s%s%s"
+            "\t}\r\n"
+            "\tprovinces = {\r\n"
+            "\t}\r\n"
+            "\tlocal_supplies = 0.0\r\n"
+            "}\r\n",
+            new_state_id, new_state_id,
+            owner ? "\t\towner = " : "",
+            owner ? owner : "",
+            owner ? "\r\n" : "");
+        if (written < 0 || (size_t)written >= sizeof(template_text)
+            || !parse_state_document(template_text, &document,
+                                     result->error, sizeof(result->error))
+            || !transform_state_document(&document,
+                                         new_provinces, moving_count,
+                                         NULL, &incoming, &output,
+                                         result->error, sizeof(result->error))) {
+            state_document_free(&document);
+            free(output);
+            goto cleanup;
+        }
+        state_document_free(&document);
+        snprintf(filename, sizeof(filename), "%d-STATE_%d.txt",
+                 new_state_id, new_state_id);
+        if (!cp_path_join(new_path, sizeof(new_path), states_dir, filename)) {
+            free(output);
+            snprintf(result->error, sizeof(result->error),
+                     "Chemin du nouvel état trop long.");
+            goto cleanup;
+        }
+        if (cp_path_exists(new_path)) {
+            free(output);
+            snprintf(result->error, sizeof(result->error),
+                     "Le fichier du nouvel état existe déjà : %.600s", new_path);
+            goto cleanup;
+        }
+        if (!change_add(&changes, "", new_path, output,
+                        result->error, sizeof(result->error))) {
+            free(output);
+            goto cleanup;
+        }
+    }
+
+    for (p = 1; p < HOI4_MAX_PROVINCES; ++p)
+        new_region[p] = map->provinces[p].strategic_region_id;
+    for (i = 0; i < plans.count; ++i) {
+        StatePlan *plan = &plans.items[i];
+        int region = preferred_region(map, plan->provinces, plan->province_count);
+        if (!region || !hoi4_map_strategic_region(map, region)) {
+            snprintf(result->error, sizeof(result->error),
+                     "Aucune région stratégique valide pour l'état %d.", plan->id);
+            goto cleanup;
+        }
+        for (p = 0; p < plan->province_count; ++p) {
+            int province = plan->provinces[p];
+            uint16_t old = new_region[province];
+            if (old != region) {
+                if (old) affected_regions[old] = 1;
+                affected_regions[region] = 1;
+                new_region[province] = (uint16_t)region;
+            }
+        }
+    }
+    new_state_region = preferred_region(map, new_provinces, moving_count);
+    if (!new_state_region || !hoi4_map_strategic_region(map, new_state_region)) {
+        snprintf(result->error, sizeof(result->error),
+                 "Aucune région stratégique valide pour le nouvel état.");
+        goto cleanup;
+    }
+    for (p = 0; p < moving_count; ++p) {
+        int province = new_provinces[p];
+        uint16_t old = new_region[province];
+        if (old != new_state_region) {
+            if (old) affected_regions[old] = 1;
+            affected_regions[new_state_region] = 1;
+            new_region[province] = (uint16_t)new_state_region;
+        }
+    }
+    for (i = 1; i < HOI4_MAX_STATES; ++i) {
+        const Hoi4StrategicRegion *region;
+        int *ids;
+        size_t count = 0;
+        char *input;
+        char *output = NULL;
+        char target_path[CP_PATH_MAX];
+        if (!affected_regions[i]) continue;
+        region = hoi4_map_strategic_region(map, (int)i);
+        if (!region) {
+            snprintf(result->error, sizeof(result->error),
+                     "Région stratégique %zu introuvable.", i);
+            goto cleanup;
+        }
+        ids = malloc(HOI4_MAX_PROVINCES * sizeof(*ids));
+        if (!ids) {
+            snprintf(result->error, sizeof(result->error),
+                     "Mémoire insuffisante pour la région %zu.", i);
+            goto cleanup;
+        }
+        for (p = 1; p < HOI4_MAX_PROVINCES; ++p)
+            if (new_region[p] == i) ids[count++] = (int)p;
+        qsort(ids, count, sizeof(ids[0]), compare_ints);
+        input = read_entire_file(region->source,
+                                 result->error, sizeof(result->error));
+        if (!input
+            || !province_transfer_replace_id_block(input, "provinces",
+                                                   ids, count, &output,
+                                                   result->error,
+                                                   sizeof(result->error))) {
+            free(ids);
+            free(input);
+            free(output);
+            goto cleanup;
+        }
+        free(ids);
+        free(input);
+        if (!target_for_source(regions_dir, region->source,
+                               target_path, sizeof(target_path))
+            || !change_add(&changes, region->source, target_path, output,
+                           result->error, sizeof(result->error))) {
+            free(output);
+            goto cleanup;
+        }
+        result->changed_strategic_regions++;
+    }
+
+    if (!cp_path_join(localization_path, sizeof(localization_path),
+                      localization_dir, "crispy_pandas_states_l_english.yml")) {
+        snprintf(result->error, sizeof(result->error),
+                 "Chemin de localisation trop long.");
+        goto cleanup;
+    }
+    {
+        char *existing = NULL;
+        char *localized;
+        snprintf(result->localization_key, sizeof(result->localization_key),
+                 "STATE_%d", new_state_id);
+        if (cp_path_exists(localization_path)) {
+            existing = read_entire_file(localization_path,
+                                        result->error, sizeof(result->error));
+            if (!existing) goto cleanup;
+        }
+        localized = build_state_localization(existing,
+                                             result->localization_key,
+                                             new_state_id,
+                                             result->error,
+                                             sizeof(result->error));
+        free(existing);
+        if (!localized) {
+            if (!result->error[0])
+                snprintf(result->error, sizeof(result->error),
+                         "Mémoire insuffisante pour la localisation.");
+            goto cleanup;
+        }
+        if (!change_add(&changes, localization_path, localization_path, localized,
+                        result->error, sizeof(result->error))) {
+            free(localized);
+            goto cleanup;
+        }
+    }
+
+    if (!commit_changes(&changes, result->error, sizeof(result->error)))
+        goto cleanup;
+    result->state_id = new_state_id;
+    result->province_count = moving_count;
+    result->changed_source_states = plans.count;
+    success = true;
+
+cleanup:
+    free(moving);
+    free(affected_regions);
+    free(new_region);
+    free(new_provinces);
+    state_plans_free(&plans);
+    assets_free(&incoming);
+    changes_free(&changes);
+    return success;
+}

@@ -142,25 +142,28 @@ static int test_province_transfer(void)
         "\t\t\tinfrastructure=2\r\n"
         "\t\t}\r\n"
         "\t}\r\n"
-        "\tprovinces={ 20 }\r\n"
+        "\tprovinces={ 20 21 }\r\n"
         "}\r\n";
     static const char region1_text[] =
         "strategic_region={ id=1 provinces={ 10 11 # Région source\r\n } }\r\n";
     static const char region2_text[] =
-        "strategic_region={ id=2 provinces={ 20 } }\r\n";
+        "strategic_region={ id=2 provinces={ 20 21 } }\r\n";
     char cwd[CP_PATH_MAX] = "", root[CP_PATH_MAX] = "", base[CP_PATH_MAX] = "", mod[CP_PATH_MAX] = "";
     char source_path[CP_PATH_MAX] = "", target_path[CP_PATH_MAX] = "";
     char region1_path[CP_PATH_MAX] = "", region2_path[CP_PATH_MAX] = "";
     char mod_states[CP_PATH_MAX] = "", mod_regions[CP_PATH_MAX] = "";
     char out_source[CP_PATH_MAX] = "", out_target[CP_PATH_MAX] = "";
     char out_region1[CP_PATH_MAX] = "", out_region2[CP_PATH_MAX] = "";
+    char out_created[CP_PATH_MAX] = "", out_localization[CP_PATH_MAX] = "";
     char error[512] = "";
     Hoi4Map map;
     Hoi4State *state1 = NULL, *state2 = NULL;
     Hoi4StrategicRegion *region1 = NULL, *region2 = NULL;
     uint8_t *selected = NULL;
     ProvinceTransferResult result;
+    ProvinceStateCreateResult create_result;
     char *source_result = NULL, *target_result = NULL, *region1_result = NULL, *region2_result = NULL;
+    char *created_result = NULL, *localization_result = NULL;
     int failure = 0;
     DWORD pid = GetCurrentProcessId();
 
@@ -190,23 +193,32 @@ static int test_province_transfer(void)
     }
     state1->id = 1; state1->province_count = 2; state1->provinces = malloc(2 * sizeof(int));
     state1->provinces[0] = 10; state1->provinces[1] = 11;
+    snprintf(state1->owner, sizeof(state1->owner), "AAA");
     snprintf(state1->source, sizeof(state1->source), "%s", source_path);
-    state2->id = 2; state2->province_count = 1; state2->provinces = malloc(sizeof(int));
-    state2->provinces[0] = 20;
+    state2->id = 2; state2->province_count = 2; state2->provinces = malloc(2 * sizeof(int));
+    state2->provinces[0] = 20; state2->provinces[1] = 21;
+    snprintf(state2->owner, sizeof(state2->owner), "BBB");
     snprintf(state2->source, sizeof(state2->source), "%s", target_path);
     region1->id = 1; region1->province_count = 2; region1->provinces = malloc(2 * sizeof(int));
     region1->provinces[0] = 10; region1->provinces[1] = 11;
     snprintf(region1->source, sizeof(region1->source), "%s", region1_path);
-    region2->id = 2; region2->province_count = 1; region2->provinces = malloc(sizeof(int));
-    region2->provinces[0] = 20;
+    region2->id = 2; region2->province_count = 2; region2->provinces = malloc(2 * sizeof(int));
+    region2->provinces[0] = 20; region2->provinces[1] = 21;
     snprintf(region2->source, sizeof(region2->source), "%s", region2_path);
     map.states[1] = state1; map.states[2] = state2;
     map.strategic_regions[1] = region1; map.strategic_regions[2] = region2;
     map.provinces[10] = (Hoi4Province){.id=10,.type=HOI4_PROVINCE_LAND,.state_id=1,.strategic_region_id=1};
     map.provinces[11] = (Hoi4Province){.id=11,.type=HOI4_PROVINCE_LAND,.state_id=1,.strategic_region_id=1};
     map.provinces[20] = (Hoi4Province){.id=20,.type=HOI4_PROVINCE_LAND,.state_id=2,.strategic_region_id=2};
+    map.provinces[21] = (Hoi4Province){.id=21,.type=HOI4_PROVINCE_LAND,.state_id=2,.strategic_region_id=2};
     selected[10] = 1;
     selected[11] = 1;
+    if (province_state_create_execute(&map, mod, selected, &create_result)
+        || !strstr(create_result.error, "viderait complètement")) {
+        fprintf(stderr, "Une création vidant l'état source n'a pas été refusée: %s\n",
+                create_result.error);
+        failure = 30; goto cleanup_map;
+    }
     if (province_transfer_execute(&map, mod, selected, 2, &result)
         || !strstr(result.error, "viderait complètement")) {
         fprintf(stderr, "Un transfert vidant l'état source n'a pas été refusé: %s\n", result.error);
@@ -253,20 +265,20 @@ static int test_province_transfer(void)
            les sources du deuxième transfert. */
         state1->province_count = 1;
         state1->provinces[0] = 11;
-        grown = realloc(state2->provinces, 2 * sizeof(int));
+        grown = realloc(state2->provinces, 3 * sizeof(int));
         if (!grown) { failure = 25; goto cleanup_map; }
         state2->provinces = grown;
-        state2->province_count = 2;
-        state2->provinces[0] = 10; state2->provinces[1] = 20;
+        state2->province_count = 3;
+        state2->provinces[0] = 10; state2->provinces[1] = 20; state2->provinces[2] = 21;
         snprintf(state1->source, sizeof(state1->source), "%s", out_source);
         snprintf(state2->source, sizeof(state2->source), "%s", out_target);
         region1->province_count = 1;
         region1->provinces[0] = 11;
-        grown = realloc(region2->provinces, 2 * sizeof(int));
+        grown = realloc(region2->provinces, 3 * sizeof(int));
         if (!grown) { failure = 25; goto cleanup_map; }
         region2->provinces = grown;
-        region2->province_count = 2;
-        region2->provinces[0] = 10; region2->provinces[1] = 20;
+        region2->province_count = 3;
+        region2->provinces[0] = 10; region2->provinces[1] = 20; region2->provinces[2] = 21;
         snprintf(region1->source, sizeof(region1->source), "%s", out_region1);
         snprintf(region2->source, sizeof(region2->source), "%s", out_region2);
         map.provinces[10].state_id = 2;
@@ -290,19 +302,79 @@ static int test_province_transfer(void)
             failure = 27;
         }
     }
+    if (!failure) {
+        char mod_localization[CP_PATH_MAX];
+        state1->province_count = 2;
+        state1->provinces[0] = 10; state1->provinces[1] = 11;
+        state2->province_count = 2;
+        state2->provinces[0] = 20; state2->provinces[1] = 21;
+        region1->province_count = 2;
+        region1->provinces[0] = 10; region1->provinces[1] = 11;
+        region2->province_count = 2;
+        region2->provinces[0] = 20; region2->provinces[1] = 21;
+        map.provinces[10].state_id = 1;
+        map.provinces[10].strategic_region_id = 1;
+        selected[10] = 1;
+        selected[20] = 1;
+        if (!province_state_create_execute(&map, mod, selected, &create_result)) {
+            fprintf(stderr, "Création d'état impossible: %s\n", create_result.error);
+            failure = 28; goto cleanup_map;
+        }
+        cp_path_join(out_created, sizeof(out_created), mod_states, "3-STATE_3.txt");
+        cp_path_join(mod_localization, sizeof(mod_localization), mod, "localisation\\english");
+        cp_path_join(out_localization, sizeof(out_localization), mod_localization,
+                     "crispy_pandas_states_l_english.yml");
+        free(source_result); free(target_result); free(region1_result); free(region2_result);
+        source_result = read_fixture(out_source); target_result = read_fixture(out_target);
+        region1_result = read_fixture(out_region1); region2_result = read_fixture(out_region2);
+        created_result = read_fixture(out_created);
+        localization_result = read_fixture(out_localization);
+        if (create_result.state_id != 3
+            || create_result.province_count != 2
+            || strcmp(create_result.localization_key, "STATE_3") != 0
+            || !source_result || !target_result || !created_result
+            || !region1_result || !region2_result || !localization_result
+            || strstr(source_result, "victory_points")
+            || strstr(source_result, "10 = {")
+            || !strstr(created_result, "id = 3")
+            || !strstr(created_result, "name = \"STATE_3\"")
+            || !strstr(created_result, "owner = AAA")
+            || !strstr(created_result, "victory_points = { 10 5 }")
+            || !strstr(created_result, "10 = {")
+            || !strstr(created_result, " 10")
+            || !strstr(created_result, " 20")
+            || !strstr(source_result, "11")
+            || !strstr(target_result, "21")
+            || !strstr(region1_result, "20")
+            || strstr(region2_result, "20")
+            || !strstr(localization_result, "l_english:")
+            || !strstr(localization_result, "STATE_3:0 \"New State 3\"")
+            || !province_transfer_validate_syntax(created_result, error, sizeof(error))) {
+            fprintf(stderr, "Résultat de création incorrect: %s\nNEW:\n%s\nLOC:\n%s\n",
+                    error, created_result ? created_result : "(null)",
+                    localization_result ? localization_result : "(null)");
+            failure = 29;
+        }
+    }
 
 cleanup_map:
     free(selected);
     hoi4_map_free(&map);
 cleanup:
     free(source_result); free(target_result); free(region1_result); free(region2_result);
+    free(created_result); free(localization_result);
+    DeleteFileA(out_created); DeleteFileA(out_localization);
     DeleteFileA(out_source); DeleteFileA(out_target); DeleteFileA(out_region1); DeleteFileA(out_region2);
     RemoveDirectoryA(mod_states); RemoveDirectoryA(mod_regions);
     {
         char history[CP_PATH_MAX], map_dir[CP_PATH_MAX];
+        char localization[CP_PATH_MAX], english[CP_PATH_MAX];
         cp_path_join(history, sizeof(history), mod, "history");
         cp_path_join(map_dir, sizeof(map_dir), mod, "map");
+        cp_path_join(localization, sizeof(localization), mod, "localisation");
+        cp_path_join(english, sizeof(english), localization, "english");
         RemoveDirectoryA(history); RemoveDirectoryA(map_dir);
+        RemoveDirectoryA(english); RemoveDirectoryA(localization);
     }
     DeleteFileA(source_path); DeleteFileA(target_path); DeleteFileA(region1_path); DeleteFileA(region2_path);
     RemoveDirectoryA(base); RemoveDirectoryA(mod); RemoveDirectoryA(root);

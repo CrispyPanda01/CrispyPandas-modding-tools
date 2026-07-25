@@ -269,6 +269,39 @@ static void transfer_selected_provinces_at(App *app, float mouse_x, float mouse_
              result.changed_strategic_regions > 1 ? "s" : "");
 }
 
+static void create_state_from_selected_provinces(App *app)
+{
+    ProvinceStateCreateResult result;
+    if (app->view_mode != HOI4_VIEW_PROVINCES) return;
+    if (app->selected_count[HOI4_VIEW_PROVINCES] == 0) {
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_WARNING,
+                                 "Création impossible",
+                                 "Sélectionnez une ou plusieurs provinces terrestres.",
+                                 app->window);
+        return;
+    }
+    if (!province_state_create_execute(&app->map, app->mod_root,
+                                       app->selected[HOI4_VIEW_PROVINCES],
+                                       &result)) {
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,
+                                 "Création annulée",
+                                 result.error, app->window);
+        return;
+    }
+    load_map(app);
+    set_view_mode(app, HOI4_VIEW_PROVINCES);
+    snprintf(app->status, sizeof(app->status),
+             "État %d créé avec %zu province%s — clé %s — %zu région%s stratégique%s ajustée%s.",
+             result.state_id,
+             result.province_count,
+             result.province_count > 1 ? "s" : "",
+             result.localization_key,
+             result.changed_strategic_regions,
+             result.changed_strategic_regions > 1 ? "s" : "",
+             result.changed_strategic_regions > 1 ? "s" : "",
+             result.changed_strategic_regions > 1 ? "s" : "");
+}
+
 static void zoom_at(App *app, float mouse_x, float mouse_y, float wheel)
 {
     float old_zoom = app->zoom;
@@ -744,8 +777,14 @@ int main(int argc, char **argv)
             case SDL_EVENT_MOUSE_BUTTON_UP:
                 if (event.button.button == SDL_BUTTON_LEFT && app.dragging
                     && !app.drag_moved) {
-                    bool extend = (SDL_GetModState() & SDL_KMOD_SHIFT) != 0;
-                    select_entity_at(&app, event.button.x, event.button.y, extend);
+                    SDL_Keymod modifiers = SDL_GetModState();
+                    if ((modifiers & SDL_KMOD_ALT)
+                        && app.view_mode == HOI4_VIEW_PROVINCES)
+                        create_state_from_selected_provinces(&app);
+                    else {
+                        bool extend = (modifiers & SDL_KMOD_SHIFT) != 0;
+                        select_entity_at(&app, event.button.x, event.button.y, extend);
+                    }
                 } else if (event.button.button == SDL_BUTTON_RIGHT && app.dragging
                            && !app.drag_moved) {
                     transfer_selected_provinces_at(&app, event.button.x, event.button.y);

@@ -61,6 +61,8 @@ Contrôles :
 - `Shift` + clic gauche : ajouter ou retirer un élément de la sélection ;
 - en mode Provinces, clic droit sur un état : transférer les provinces
   sélectionnées vers cet état ;
+- en mode Provinces, `Alt` + clic gauche : créer un nouvel état avec les
+  provinces actuellement sélectionnées ;
 - double-clic gauche sur un état : ouvrir son fichier source dans l'éditeur
   associé aux fichiers `.txt`.
 - `Ctrl` + `Entrée` : modifier l'owner, le controller et les cores des états
@@ -80,6 +82,12 @@ provinciaux suivent leur province. Les régions stratégiques sont ajustées pou
 que toutes les provinces d'un état affecté appartiennent à une seule région.
 L'opération est préparée et validée en entier avant l'écriture; elle est annulée
 si elle viderait un état source ou rencontrerait une structure ambiguë.
+
+La création d'un état applique les mêmes garanties. Elle choisit le prochain ID
+d'état disponible après le plus grand ID chargé, utilise la clé `STATE_<ID>`,
+ajoute sa localisation anglaise dans
+`localisation/english/crispy_pandas_states_l_english.yml`, puis transfère les
+assets provinciaux et réconcilie les régions stratégiques.
 
 Les trois modes sont aussi accessibles avec les boutons de la barre supérieure.
 

@@ -3,6 +3,7 @@
 #include <windows.h>
 #include <shlobj.h>
 #include <shellapi.h>
+#include <commdlg.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -151,6 +152,24 @@ bool cp_choose_folder(const char *title, const char *initial, char *out, size_t 
     }
     CoTaskMemFree(item);
     CoUninitialize();
+    snprintf(out, size, "%s", selected);
+    return true;
+}
+
+bool cp_choose_image_file(const char *title, char *out, size_t size)
+{
+    OPENFILENAMEA dialog = {0};
+    char selected[CP_PATH_MAX] = "";
+    dialog.lStructSize = sizeof(dialog);
+    dialog.lpstrTitle = title;
+    dialog.lpstrFile = selected;
+    dialog.nMaxFile = sizeof(selected);
+    dialog.lpstrFilter =
+        "Images (*.png;*.jpg;*.jpeg;*.bmp;*.tif;*.tiff)\0"
+        "*.png;*.jpg;*.jpeg;*.bmp;*.tif;*.tiff\0"
+        "Tous les fichiers (*.*)\0*.*\0\0";
+    dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+    if (!GetOpenFileNameA(&dialog)) return false;
     snprintf(out, size, "%s", selected);
     return true;
 }

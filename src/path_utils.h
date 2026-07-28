@@ -11,6 +11,7 @@ bool cp_path_is_dir(const char *path);
 bool cp_path_join(char *out, size_t size, const char *left, const char *right);
 bool cp_find_hoi4(char *out, size_t size);
 bool cp_choose_folder(const char *title, const char *initial, char *out, size_t size);
+bool cp_choose_image_file(const char *title, char *out, size_t size);
 bool cp_open_file(const char *path);
 bool cp_load_settings(char *game_root, size_t game_size, char *mod_root, size_t mod_size);
 bool cp_save_settings(const char *game_root, const char *mod_root);

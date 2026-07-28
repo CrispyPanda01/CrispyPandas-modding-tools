@@ -91,6 +91,40 @@ assets provinciaux et réconcilie les régions stratégiques.
 
 Les trois modes sont aussi accessibles avec les boutons de la barre supérieure.
 
+## Créateur de characters
+
+Le bouton `Outil Characters` ouvre le second outil de la collection. Il permet
+de créer un personnage avec plusieurs rôles : leader de pays, advisor, général,
+maréchal, amiral et scientist. Chaque rôle affiche ses paramètres propres.
+
+Le panneau de droite charge les traits présents dans le jeu et dans le mod
+(`country_leader`, `unit_leader` et `scientist_traits`), avec recherche et
+sélection multiple.
+
+Le portrait large est obligatoire. Le portrait small est optionnel. Lorsqu'il
+n'est pas fourni, le large est automatiquement recadré, réduit, incliné et placé
+dans le cadre officiel d'advisor/idea. Les images PNG, JPEG, BMP et TIFF sont
+traitées puis produites en DDS aux dimensions vanilla :
+
+- large : `156×210` ;
+- small : `65×67`.
+
+La création écrit ou met à jour :
+
+```text
+common/characters/zz_crispy_pandas_TAG.txt
+interface/crispy_pandas_characters.gfx
+gfx/leaders/TAG/portrait_TAG_token.dds
+gfx/interface/ideas/idea_TAG_token.dds
+history/countries/TAG - Pays.txt
+```
+
+Le nom affiché est écrit directement dans le bloc du character. L'entrée
+`recruit_character` est ajoutée automatiquement à l'historique du pays. Si cet
+historique provient du jeu vanilla, il est copié dans le mod avant modification.
+Les cinq sorties sont validées et écrites dans une même transaction ; une
+collision de token ou de portrait annule l'opération.
+
 La préférence est enregistrée dans
 `%APPDATA%\CrispyPandas\settings.ini`. Si le dossier du mod n'existe plus, le
 visualisateur demande d'en sélectionner un nouveau avant de continuer.

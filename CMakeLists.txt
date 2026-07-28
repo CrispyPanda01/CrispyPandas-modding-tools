@@ -15,6 +15,9 @@ add_executable(crispy-pandas WIN32
     src/path_utils.c
     src/state_edit.c
     src/province_transfer.c
+    src/character_creator.c
+    src/portrait_image.c
+    src/character_ui.c
 )
 
 target_include_directories(crispy-pandas PRIVATE src)
@@ -31,6 +34,9 @@ target_link_libraries(crispy-pandas PRIVATE
     SDL3_ttf::SDL3_ttf
     shell32
     ole32
+    comdlg32
+    windowscodecs
+    uuid
     m
 )
 
@@ -42,6 +48,9 @@ if(WIN32)
         COMMAND "${CMAKE_COMMAND}" -E copy_if_different
                 "$<TARGET_FILE:SDL3_ttf::SDL3_ttf-shared>"
                 "$<TARGET_FILE_DIR:crispy-pandas>"
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+                "${CMAKE_SOURCE_DIR}/assets/advisor_small_template.png"
+                "$<TARGET_FILE_DIR:crispy-pandas>/advisor_small_template.png"
         VERBATIM
     )
 endif()
@@ -54,9 +63,17 @@ if(BUILD_TESTING)
         src/path_utils.c
         src/state_edit.c
         src/province_transfer.c
+        src/character_creator.c
+        src/portrait_image.c
     )
     target_include_directories(hoi4-parser-tests PRIVATE src)
     target_compile_definitions(hoi4-parser-tests PRIVATE _CRT_SECURE_NO_WARNINGS)
-    target_link_libraries(hoi4-parser-tests PRIVATE shell32 ole32)
+    target_link_libraries(hoi4-parser-tests PRIVATE shell32 ole32 comdlg32 windowscodecs uuid m)
+    add_custom_command(TARGET hoi4-parser-tests POST_BUILD
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+                "${CMAKE_SOURCE_DIR}/assets/advisor_small_template.png"
+                "$<TARGET_FILE_DIR:hoi4-parser-tests>/advisor_small_template.png"
+        VERBATIM
+    )
     add_test(NAME hoi4-parser-tests COMMAND hoi4-parser-tests)
 endif()

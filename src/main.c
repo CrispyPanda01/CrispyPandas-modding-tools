@@ -11,6 +11,7 @@
 #include <string.h>
 
 #include "hoi4_map.h"
+#include "character_ui.h"
 #include "path_utils.h"
 #include "province_transfer.h"
 #include "state_edit.h"
@@ -28,6 +29,11 @@ typedef struct {
     bool keep_existing_cores;
     char error[512];
 } EditDialog;
+
+typedef enum {
+    APP_TOOL_MAP,
+    APP_TOOL_CHARACTERS
+} AppTool;
 
 typedef struct {
     SDL_Window *window;
@@ -53,6 +59,8 @@ typedef struct {
     float last_mouse_x;
     float last_mouse_y;
     EditDialog edit_dialog;
+    AppTool tool;
+    CharacterCreatorUI characters;
 } App;
 
 static void draw_text(App *app, TTF_Font *font, const char *text, float x, float y, SDL_Color color)
@@ -335,6 +343,12 @@ static void render_toolbar(App *app, int window_width)
     SDL_SetRenderDrawColor(app->renderer, 25, 30, 41, 255);
     SDL_RenderFillRect(app->renderer, &bar);
     draw_text(app, app->font, "Crispy Pandas  /  Map Viewer", 18, 8, white);
+    SDL_SetRenderDrawColor(app->renderer, 48, 112, 196, 255);
+    {
+        SDL_FRect tool = {620, 7, 142, 30};
+        SDL_RenderFillRect(app->renderer, &tool);
+    }
+    draw_text(app, app->font_small, "Outil Characters", 631, 14, white);
     draw_mode_button(app, HOI4_VIEW_STATES, "1  États", 250, 78);
     draw_mode_button(app, HOI4_VIEW_PROVINCES, "2  Provinces", 336, 105);
     draw_mode_button(app, HOI4_VIEW_STRATEGIC_REGIONS, "3  Régions stratégiques", 449, 166);
@@ -348,8 +362,8 @@ static void render_toolbar(App *app, int window_width)
             snprintf(line, sizeof(line), "État %d — %s   |   Owner: %s   |   %zu provinces   |   Sélection: %zu",
                      state->id, state->name, state->owner[0] ? state->owner : "aucun",
                      state->province_count, app->selected_count[app->view_mode]);
-            draw_text(app, app->font, line, (float)window_width * 0.48f, 10, white);
-            draw_text(app, app->font_small, state->source, (float)window_width * 0.48f, 38, muted);
+            draw_text(app, app->font, line, (float)window_width * 0.57f, 10, white);
+            draw_text(app, app->font_small, state->source, (float)window_width * 0.57f, 38, muted);
         } else if (app->view_mode == HOI4_VIEW_PROVINCES) {
             const Hoi4Province *province = hoi4_map_province(&app->map, app->hover_entity);
             const Hoi4State *state;
@@ -363,7 +377,7 @@ static void render_toolbar(App *app, int window_width)
                      province->id, type, state ? state->name : "aucun",
                      state && state->owner[0] ? state->owner : "aucun",
                      app->selected_count[app->view_mode]);
-            draw_text(app, app->font, line, (float)window_width * 0.48f, 20, white);
+            draw_text(app, app->font, line, (float)window_width * 0.57f, 20, white);
         } else {
             const Hoi4StrategicRegion *region =
                 hoi4_map_strategic_region(&app->map, app->hover_entity);
@@ -371,15 +385,37 @@ static void render_toolbar(App *app, int window_width)
             snprintf(line, sizeof(line), "Région stratégique %d — %s   |   %zu provinces   |   Sélection: %zu",
                      region->id, region->name, region->province_count,
                      app->selected_count[app->view_mode]);
-            draw_text(app, app->font, line, (float)window_width * 0.48f, 10, white);
+            draw_text(app, app->font, line, (float)window_width * 0.57f, 10, white);
             draw_text(app, app->font_small, region->source,
-                      (float)window_width * 0.48f, 38, muted);
+                      (float)window_width * 0.57f, 38, muted);
         }
     } else {
         snprintf(line, sizeof(line), "%.470s   |   Sélection : %zu",
                  app->status, app->selected_count[app->view_mode]);
-        draw_text(app, app->font_small, line, (float)window_width * 0.48f, 23, muted);
+        draw_text(app, app->font_small, line, (float)window_width * 0.57f, 23, muted);
     }
+}
+
+static void render_character_toolbar(App *app, int window_width)
+{
+    SDL_FRect bar = {0, 0, (float)window_width, TOOLBAR_HEIGHT};
+    SDL_FRect map_button = {18, 7, 120, 32};
+    SDL_FRect selected = {146, 7, 176, 32};
+    SDL_Color white = {235, 239, 247, 255};
+    SDL_Color muted = {164, 174, 194, 255};
+    SDL_SetRenderDrawColor(app->renderer, 25, 30, 41, 255);
+    SDL_RenderFillRect(app->renderer, &bar);
+    SDL_SetRenderDrawColor(app->renderer, 44, 51, 67, 255);
+    SDL_RenderFillRect(app->renderer, &map_button);
+    SDL_SetRenderDrawColor(app->renderer, 48, 112, 196, 255);
+    SDL_RenderFillRect(app->renderer, &selected);
+    draw_text(app, app->font_small, "Map Viewer", 38, 16, white);
+    draw_text(app, app->font_small, "Créateur de characters", 158, 16, white);
+    draw_text(app, app->font_small, "Mod :", 348, 12, muted);
+    draw_text(app, app->font_small, app->mod_root, 388, 12, white);
+    draw_text(app, app->font_small,
+              "Ctrl+Entrée : créer   |   molette : défiler",
+              348, 36, muted);
 }
 
 static void dialog_layout(App *app, SDL_FRect *panel, SDL_FRect fields[3],
@@ -488,15 +524,21 @@ static void render(App *app)
     SDL_GetWindowSize(app->window, &width, &height);
     SDL_SetRenderDrawColor(app->renderer, 9, 12, 18, 255);
     SDL_RenderClear(app->renderer);
-    if (app->map_texture) {
+    if (app->tool == APP_TOOL_MAP && app->map_texture) {
         SDL_FRect target = {
             app->offset_x, app->offset_y,
             app->map.width * app->zoom, app->map.height * app->zoom
         };
         SDL_RenderTexture(app->renderer, app->map_texture, NULL, &target);
     }
-    render_toolbar(app, width);
-    render_edit_dialog(app);
+    if (app->tool == APP_TOOL_MAP) {
+        render_toolbar(app, width);
+        render_edit_dialog(app);
+    } else {
+        character_ui_render(&app->characters, app->window, app->renderer,
+                            app->font, app->font_small);
+        render_character_toolbar(app, width);
+    }
     SDL_RenderPresent(app->renderer);
 }
 
@@ -508,6 +550,7 @@ static void choose_game(App *app)
         snprintf(app->game_root, sizeof(app->game_root), "%s", selected);
         cp_save_settings(app->game_root, app->mod_root);
         load_map(app);
+        character_ui_reload(&app->characters, app->game_root, app->mod_root);
     }
 }
 
@@ -519,6 +562,7 @@ static void choose_mod(App *app)
         snprintf(app->mod_root, sizeof(app->mod_root), "%s", selected);
         cp_save_settings(app->game_root, app->mod_root);
         load_map(app);
+        character_ui_reload(&app->characters, app->game_root, app->mod_root);
     }
 }
 
@@ -681,6 +725,8 @@ static void parse_arguments(App *app, int argc, char **argv)
             snprintf(app->game_root, sizeof(app->game_root), "%s", argv[++i]);
         } else if (strcmp(argv[i], "--mod") == 0 && i + 1 < argc) {
             snprintf(app->mod_root, sizeof(app->mod_root), "%s", argv[++i]);
+        } else if (strcmp(argv[i], "--characters") == 0) {
+            app->tool = APP_TOOL_CHARACTERS;
         }
     }
 }
@@ -726,6 +772,7 @@ int main(int argc, char **argv)
     SDL_SetRenderVSync(app.renderer, 1);
     app.font = open_system_font(18);
     app.font_small = open_system_font(13);
+    character_ui_init(&app.characters, app.game_root, app.mod_root);
     if (!app.game_root[0]) {
         snprintf(app.status, sizeof(app.status), "HOI4 introuvable : appuie sur G pour choisir son dossier.");
     } else {
@@ -742,6 +789,20 @@ int main(int argc, char **argv)
                 handle_edit_dialog_event(&app, &event);
                 continue;
             }
+            if (app.tool == APP_TOOL_CHARACTERS) {
+                if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN
+                    && event.button.button == SDL_BUTTON_LEFT
+                    && event.button.y < 48
+                    && event.button.x >= 18 && event.button.x < 138) {
+                    app.tool = APP_TOOL_MAP;
+                    SDL_StopTextInput(app.window);
+                    continue;
+                }
+                character_ui_handle_event(&app.characters,
+                                          app.window, app.renderer, &event,
+                                          app.game_root, app.mod_root);
+                continue;
+            }
             switch (event.type) {
             case SDL_EVENT_KEY_DOWN:
                 if ((event.key.mod & SDL_KMOD_CTRL)
@@ -756,7 +817,10 @@ int main(int argc, char **argv)
                     app.dragging = false;
                     open_state_at(&app, event.button.x, event.button.y);
                 } else if (event.button.y < 42) {
-                    if (event.button.x >= 250 && event.button.x < 328)
+                    if (event.button.x >= 620 && event.button.x < 762) {
+                        app.tool = APP_TOOL_CHARACTERS;
+                        app.dragging = false;
+                    } else if (event.button.x >= 250 && event.button.x < 328)
                         set_view_mode(&app, HOI4_VIEW_STATES);
                     else if (event.button.x >= 336 && event.button.x < 441)
                         set_view_mode(&app, HOI4_VIEW_PROVINCES);
@@ -821,6 +885,7 @@ int main(int argc, char **argv)
     }
 
     hoi4_map_free(&app.map);
+    character_ui_free(&app.characters);
     if (app.font_small) TTF_CloseFont(app.font_small);
     if (app.font) TTF_CloseFont(app.font);
     if (app.map_texture) SDL_DestroyTexture(app.map_texture);

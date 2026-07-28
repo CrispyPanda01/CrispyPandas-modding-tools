@@ -1,4 +1,5 @@
 #include "hoi4_map.h"
+#include "character_creator.h"
 #include "path_utils.h"
 #include "province_transfer.h"
 #include "state_edit.h"
@@ -18,6 +19,23 @@ static size_t occurrence_count(const char *text, const char *needle)
         text += length;
     }
     return count;
+}
+
+static bool write_test_bmp(const char *path)
+{
+    unsigned char bmp[70] = {
+        'B','M',70,0,0,0, 0,0,0,0, 54,0,0,0,
+        40,0,0,0, 2,0,0,0, 2,0,0,0, 1,0, 24,0,
+        0,0,0,0, 16,0,0,0, 0,0,0,0, 0,0,0,0,
+        0,0,0,0, 0,0,0,0,
+        0,0,255, 0,255,0, 0,0,
+        255,0,0, 255,255,255, 0,0
+    };
+    FILE *file = fopen(path, "wb");
+    bool ok;
+    if (!file) return false;
+    ok = fwrite(bmp, 1, sizeof(bmp), file) == sizeof(bmp);
+    return fclose(file) == 0 && ok;
 }
 
 static int test_state_edit(void)
@@ -381,12 +399,235 @@ cleanup:
     return failure;
 }
 
+static bool dds_dimensions(const char *path, int *width, int *height)
+{
+    unsigned char header[20];
+    FILE *file = fopen(path, "rb");
+    if (!file) return false;
+    if (fread(header, 1, sizeof(header), file) != sizeof(header)) {
+        fclose(file);
+        return false;
+    }
+    fclose(file);
+    if (memcmp(header, "DDS ", 4) != 0) return false;
+    *height = (int)(header[12] | header[13] << 8
+                    | header[14] << 16 | header[15] << 24);
+    *width = (int)(header[16] | header[17] << 8
+                   | header[18] << 16 | header[19] << 24);
+    return true;
+}
+
+static bool dds_pixel(const char *path, int x, int y,
+                      unsigned char *red, unsigned char *green,
+                      unsigned char *blue, unsigned char *alpha)
+{
+    unsigned char pixel[4];
+    int width, height;
+    FILE *file = NULL;
+    if (!dds_dimensions(path, &width, &height)
+        || x < 0 || y < 0 || x >= width || y >= height
+        || !(file = fopen(path, "rb"))
+        || fseek(file, 128L + ((long)y * width + x) * 4L, SEEK_SET) != 0
+        || fread(pixel, 1, 4, file) != 4) {
+        if (file) fclose(file);
+        return false;
+    }
+    fclose(file);
+    *blue = pixel[0];
+    *green = pixel[1];
+    *red = pixel[2];
+    *alpha = pixel[3];
+    return true;
+}
+
+static int test_character_creator(void)
+{
+    char cwd[CP_PATH_MAX] = "", root[CP_PATH_MAX] = "";
+    char game[CP_PATH_MAX] = "", mod[CP_PATH_MAX] = "";
+    char common[CP_PATH_MAX] = "", country_traits_dir[CP_PATH_MAX] = "";
+    char unit_traits_dir[CP_PATH_MAX] = "", scientist_traits_dir[CP_PATH_MAX] = "";
+    char history[CP_PATH_MAX] = "", countries[CP_PATH_MAX] = "";
+    char country_traits[CP_PATH_MAX] = "", unit_traits[CP_PATH_MAX] = "";
+    char scientist_traits[CP_PATH_MAX] = "", country_history[CP_PATH_MAX] = "";
+    char image[CP_PATH_MAX] = "";
+    char *character_text = NULL, *gfx_text = NULL, *history_text = NULL;
+    CharacterCreateRequest request;
+    CharacterCreateResult result = {0};
+    CharacterCreateResult collision_result = {0};
+    CharacterTraitCatalog catalog = {0};
+    DWORD pid = GetCurrentProcessId();
+    int large_w = 0, large_h = 0, small_w = 0, small_h = 0;
+    unsigned char red = 0, green = 0, blue = 0;
+    unsigned char corner_alpha = 255, paper_alpha = 0;
+    int failure = 0;
+
+    GetCurrentDirectoryA(sizeof(cwd), cwd);
+    snprintf(root, sizeof(root), "%.4000s\\character-fixture-%lu",
+             cwd, (unsigned long)pid);
+    cp_path_join(game, sizeof(game), root, "game");
+    cp_path_join(mod, sizeof(mod), root, "mod");
+    CreateDirectoryA(root, NULL);
+    CreateDirectoryA(game, NULL);
+    CreateDirectoryA(mod, NULL);
+
+    cp_path_join(common, sizeof(common), game, "common");
+    CreateDirectoryA(common, NULL);
+    cp_path_join(country_traits_dir, sizeof(country_traits_dir),
+                 common, "country_leader");
+    cp_path_join(unit_traits_dir, sizeof(unit_traits_dir), common, "unit_leader");
+    cp_path_join(scientist_traits_dir, sizeof(scientist_traits_dir),
+                 common, "scientist_traits");
+    CreateDirectoryA(country_traits_dir, NULL);
+    CreateDirectoryA(unit_traits_dir, NULL);
+    CreateDirectoryA(scientist_traits_dir, NULL);
+    cp_path_join(country_traits, sizeof(country_traits),
+                 country_traits_dir, "traits.txt");
+    cp_path_join(unit_traits, sizeof(unit_traits), unit_traits_dir, "traits.txt");
+    cp_path_join(scientist_traits, sizeof(scientist_traits),
+                 scientist_traits_dir, "traits.txt");
+    write_fixture(country_traits,
+                  "leader_traits = { fixture_country_trait = { random = no } }\r\n");
+    write_fixture(unit_traits,
+                  "leader_traits = { fixture_unit_trait = { type = land } }\r\n");
+    write_fixture(scientist_traits,
+                  "fixture_scientist_trait = { icon = GFX_fixture }\r\n");
+
+    cp_path_join(history, sizeof(history), game, "history");
+    CreateDirectoryA(history, NULL);
+    cp_path_join(countries, sizeof(countries), history, "countries");
+    CreateDirectoryA(countries, NULL);
+    cp_path_join(country_history, sizeof(country_history),
+                 countries, "AAA - Fixture.txt");
+    write_fixture(country_history, "capital = 1\r\n");
+    cp_path_join(image, sizeof(image), root, "portrait.bmp");
+    if (!write_test_bmp(image)) {
+        failure = 40;
+        goto cleanup;
+    }
+
+    if (!character_trait_catalog_load(&catalog, game, mod)
+        || catalog.count != 3) {
+        fprintf(stderr, "Catalogue de traits incorrect: %zu (%s)\n",
+                catalog.count, catalog.error);
+        failure = 41;
+        goto cleanup;
+    }
+
+    character_create_request_defaults(&request);
+    snprintf(request.country_tag, sizeof(request.country_tag), "AAA");
+    snprintf(request.token, sizeof(request.token), "AAA_jane_doe");
+    snprintf(request.name, sizeof(request.name), "Jane \"Ace\" Doe");
+    request.roles = CHARACTER_ROLE_COUNTRY_LEADER
+        | CHARACTER_ROLE_ADVISOR | CHARACTER_ROLE_GENERAL
+        | CHARACTER_ROLE_FIELD_MARSHAL | CHARACTER_ROLE_NAVY_LEADER
+        | CHARACTER_ROLE_SCIENTIST;
+    snprintf(request.country_traits, sizeof(request.country_traits),
+             "fixture_country_trait");
+    snprintf(request.advisor_traits, sizeof(request.advisor_traits),
+             "fixture_country_trait");
+    snprintf(request.land_traits, sizeof(request.land_traits),
+             "fixture_unit_trait");
+    snprintf(request.navy_traits, sizeof(request.navy_traits),
+             "fixture_unit_trait");
+    snprintf(request.scientist_traits, sizeof(request.scientist_traits),
+             "fixture_scientist_trait");
+    snprintf(request.large_portrait, sizeof(request.large_portrait), "%s", image);
+    if (!character_create_execute(game, mod, &request, &result)) {
+        fprintf(stderr, "Création de character impossible: %s\n", result.error);
+        failure = 42;
+        goto cleanup;
+    }
+    character_text = read_fixture(result.character_file);
+    gfx_text = read_fixture(result.gfx_file);
+    history_text = read_fixture(result.history_file);
+    if (result.changed_files != 5
+        || !character_text || !gfx_text || !history_text
+        || !strstr(character_text, "AAA_jane_doe = {")
+        || !strstr(character_text, "name = \"Jane \\\"Ace\\\" Doe\"")
+        || !strstr(character_text, "country_leader = {")
+        || !strstr(character_text, "advisor = {")
+        || !strstr(character_text, "corps_commander = {")
+        || !strstr(character_text, "field_marshal = {")
+        || !strstr(character_text, "navy_leader = {")
+        || !strstr(character_text, "scientist = {")
+        || !strstr(gfx_text, "GFX_portrait_AAA_jane_doe_small")
+        || !strstr(history_text, "capital = 1")
+        || !strstr(history_text, "recruit_character = AAA_jane_doe")
+        || !dds_dimensions(result.large_portrait_file, &large_w, &large_h)
+        || !dds_dimensions(result.small_portrait_file, &small_w, &small_h)
+        || large_w != 156 || large_h != 210 || small_w != 65 || small_h != 67
+        || !dds_pixel(result.small_portrait_file, 0, 0,
+                      &red, &green, &blue, &corner_alpha)
+        || !dds_pixel(result.small_portrait_file, 45, 40,
+                      &red, &green, &blue, &paper_alpha)
+        || corner_alpha != 0 || paper_alpha == 0
+        || !province_transfer_validate_syntax(character_text,
+                                              result.error, sizeof(result.error))
+        || !province_transfer_validate_syntax(gfx_text,
+                                              result.error, sizeof(result.error))
+        || !province_transfer_validate_syntax(history_text,
+                                              result.error, sizeof(result.error))) {
+        fprintf(stderr, "Sortie character invalide: %s\nCHAR:\n%s\nGFX:\n%s\n",
+                result.error, character_text ? character_text : "(null)",
+                gfx_text ? gfx_text : "(null)");
+        failure = 43;
+        goto cleanup;
+    }
+    if (character_create_execute(game, mod, &request, &collision_result)
+        || !strstr(collision_result.error, "existe déjà")) {
+        fprintf(stderr, "La collision de token n'a pas été refusée: %s\n",
+                collision_result.error);
+        failure = 44;
+    }
+
+cleanup:
+    free(character_text);
+    free(gfx_text);
+    free(history_text);
+    character_trait_catalog_free(&catalog);
+    DeleteFileA(result.character_file);
+    DeleteFileA(result.gfx_file);
+    DeleteFileA(result.history_file);
+    DeleteFileA(result.large_portrait_file);
+    DeleteFileA(result.small_portrait_file);
+    DeleteFileA(image);
+    DeleteFileA(country_traits);
+    DeleteFileA(unit_traits);
+    DeleteFileA(scientist_traits);
+    DeleteFileA(country_history);
+    {
+        char path[CP_PATH_MAX];
+        cp_path_join(path, sizeof(path), mod, "common\\characters"); RemoveDirectoryA(path);
+        cp_path_join(path, sizeof(path), mod, "common"); RemoveDirectoryA(path);
+        cp_path_join(path, sizeof(path), mod, "interface"); RemoveDirectoryA(path);
+        cp_path_join(path, sizeof(path), mod, "gfx\\leaders\\AAA"); RemoveDirectoryA(path);
+        cp_path_join(path, sizeof(path), mod, "gfx\\leaders"); RemoveDirectoryA(path);
+        cp_path_join(path, sizeof(path), mod, "gfx\\interface\\ideas"); RemoveDirectoryA(path);
+        cp_path_join(path, sizeof(path), mod, "gfx\\interface"); RemoveDirectoryA(path);
+        cp_path_join(path, sizeof(path), mod, "gfx"); RemoveDirectoryA(path);
+        cp_path_join(path, sizeof(path), mod, "history\\countries"); RemoveDirectoryA(path);
+        cp_path_join(path, sizeof(path), mod, "history"); RemoveDirectoryA(path);
+    }
+    RemoveDirectoryA(country_traits_dir);
+    RemoveDirectoryA(unit_traits_dir);
+    RemoveDirectoryA(scientist_traits_dir);
+    RemoveDirectoryA(common);
+    RemoveDirectoryA(countries);
+    RemoveDirectoryA(history);
+    RemoveDirectoryA(game);
+    RemoveDirectoryA(mod);
+    RemoveDirectoryA(root);
+    return failure;
+}
+
 int main(int argc, char **argv)
 {
     char path[CP_PATH_MAX];
     int edit_result = test_state_edit();
     if (edit_result) return edit_result;
     edit_result = test_province_transfer();
+    if (edit_result) return edit_result;
+    edit_result = test_character_creator();
     if (edit_result) return edit_result;
     if (!cp_path_join(path, sizeof(path), "C:\\Games\\HOI4", "map\\provinces.bmp")) return 1;
     if (strcmp(path, "C:\\Games\\HOI4\\map\\provinces.bmp") != 0) {
@@ -395,10 +636,21 @@ int main(int argc, char **argv)
     }
     if (argc > 1) {
         Hoi4Map map;
+        CharacterTraitCatalog live_traits = {0};
         const Hoi4State *state;
         size_t i;
         size_t state_pixel = (size_t)-1;
         uint32_t before;
+        if (!character_trait_catalog_load(&live_traits, argv[1],
+                                          argc > 2 ? argv[2] : "")
+            || live_traits.count < 10) {
+            fprintf(stderr, "Catalogue réel de traits invalide: %zu (%s)\n",
+                    live_traits.count, live_traits.error);
+            character_trait_catalog_free(&live_traits);
+            return 18;
+        }
+        printf("traits=%zu\n", live_traits.count);
+        character_trait_catalog_free(&live_traits);
         hoi4_map_init(&map);
         if (!hoi4_map_load(&map, argv[1], argc > 2 ? argv[2] : "")) {
             fprintf(stderr, "Chargement impossible: %s\n", map.error);

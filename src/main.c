@@ -12,6 +12,7 @@
 
 #include "hoi4_map.h"
 #include "character_ui.h"
+#include "country_ui.h"
 #include "path_utils.h"
 #include "province_transfer.h"
 #include "state_edit.h"
@@ -32,7 +33,8 @@ typedef struct {
 
 typedef enum {
     APP_TOOL_MAP,
-    APP_TOOL_CHARACTERS
+    APP_TOOL_CHARACTERS,
+    APP_TOOL_COUNTRIES
 } AppTool;
 
 typedef struct {
@@ -61,6 +63,7 @@ typedef struct {
     EditDialog edit_dialog;
     AppTool tool;
     CharacterCreatorUI characters;
+    CountryCreatorUI countries;
 } App;
 
 static void draw_text(App *app, TTF_Font *font, const char *text, float x, float y, SDL_Color color)
@@ -349,6 +352,12 @@ static void render_toolbar(App *app, int window_width)
         SDL_RenderFillRect(app->renderer, &tool);
     }
     draw_text(app, app->font_small, "Outil Characters", 631, 14, white);
+    SDL_SetRenderDrawColor(app->renderer, 44, 51, 67, 255);
+    {
+        SDL_FRect tool = {770, 7, 130, 30};
+        SDL_RenderFillRect(app->renderer, &tool);
+    }
+    draw_text(app, app->font_small, "Créer un pays", 782, 14, white);
     draw_mode_button(app, HOI4_VIEW_STATES, "1  États", 250, 78);
     draw_mode_button(app, HOI4_VIEW_PROVINCES, "2  Provinces", 336, 105);
     draw_mode_button(app, HOI4_VIEW_STRATEGIC_REGIONS, "3  Régions stratégiques", 449, 166);
@@ -401,6 +410,7 @@ static void render_character_toolbar(App *app, int window_width)
     SDL_FRect bar = {0, 0, (float)window_width, TOOLBAR_HEIGHT};
     SDL_FRect map_button = {18, 7, 120, 32};
     SDL_FRect selected = {146, 7, 176, 32};
+    SDL_FRect country_button = {330, 7, 144, 32};
     SDL_Color white = {235, 239, 247, 255};
     SDL_Color muted = {164, 174, 194, 255};
     SDL_SetRenderDrawColor(app->renderer, 25, 30, 41, 255);
@@ -409,13 +419,40 @@ static void render_character_toolbar(App *app, int window_width)
     SDL_RenderFillRect(app->renderer, &map_button);
     SDL_SetRenderDrawColor(app->renderer, 48, 112, 196, 255);
     SDL_RenderFillRect(app->renderer, &selected);
+    SDL_SetRenderDrawColor(app->renderer, 44, 51, 67, 255);
+    SDL_RenderFillRect(app->renderer, &country_button);
     draw_text(app, app->font_small, "Map Viewer", 38, 16, white);
     draw_text(app, app->font_small, "Créateur de characters", 158, 16, white);
-    draw_text(app, app->font_small, "Mod :", 348, 12, muted);
-    draw_text(app, app->font_small, app->mod_root, 388, 12, white);
+    draw_text(app, app->font_small, "Créateur de pays", 342, 16, white);
+    draw_text(app, app->font_small, "Mod :", 500, 12, muted);
+    draw_text(app, app->font_small, app->mod_root, 540, 12, white);
     draw_text(app, app->font_small,
               "Ctrl+Entrée : créer   |   molette : défiler",
-              348, 36, muted);
+              500, 36, muted);
+}
+
+static void render_country_toolbar(App *app, int window_width)
+{
+    SDL_FRect bar = {0, 0, (float)window_width, TOOLBAR_HEIGHT};
+    SDL_FRect map_button = {18, 7, 120, 32};
+    SDL_FRect character_button = {146, 7, 176, 32};
+    SDL_FRect selected = {330, 7, 144, 32};
+    SDL_Color white = {235, 239, 247, 255};
+    SDL_Color muted = {164, 174, 194, 255};
+    SDL_SetRenderDrawColor(app->renderer, 25, 30, 41, 255);
+    SDL_RenderFillRect(app->renderer, &bar);
+    SDL_SetRenderDrawColor(app->renderer, 44, 51, 67, 255);
+    SDL_RenderFillRect(app->renderer, &map_button);
+    SDL_RenderFillRect(app->renderer, &character_button);
+    SDL_SetRenderDrawColor(app->renderer, 48, 112, 196, 255);
+    SDL_RenderFillRect(app->renderer, &selected);
+    draw_text(app, app->font_small, "Map Viewer", 38, 16, white);
+    draw_text(app, app->font_small, "Créateur de characters", 158, 16, white);
+    draw_text(app, app->font_small, "Créateur de pays", 342, 16, white);
+    draw_text(app, app->font_small, "Mod :", 500, 12, muted);
+    draw_text(app, app->font_small, app->mod_root, 540, 12, white);
+    draw_text(app, app->font_small,
+              "Ctrl+Entrée : créer le pays", 500, 36, muted);
 }
 
 static void dialog_layout(App *app, SDL_FRect *panel, SDL_FRect fields[3],
@@ -534,10 +571,14 @@ static void render(App *app)
     if (app->tool == APP_TOOL_MAP) {
         render_toolbar(app, width);
         render_edit_dialog(app);
-    } else {
+    } else if (app->tool == APP_TOOL_CHARACTERS) {
         character_ui_render(&app->characters, app->window, app->renderer,
                             app->font, app->font_small);
         render_character_toolbar(app, width);
+    } else {
+        country_ui_render(&app->countries, app->window, app->renderer,
+                          app->font, app->font_small);
+        render_country_toolbar(app, width);
     }
     SDL_RenderPresent(app->renderer);
 }
@@ -551,6 +592,7 @@ static void choose_game(App *app)
         cp_save_settings(app->game_root, app->mod_root);
         load_map(app);
         character_ui_reload(&app->characters, app->game_root, app->mod_root);
+        country_ui_reload(&app->countries);
     }
 }
 
@@ -563,6 +605,7 @@ static void choose_mod(App *app)
         cp_save_settings(app->game_root, app->mod_root);
         load_map(app);
         character_ui_reload(&app->characters, app->game_root, app->mod_root);
+        country_ui_reload(&app->countries);
     }
 }
 
@@ -727,6 +770,8 @@ static void parse_arguments(App *app, int argc, char **argv)
             snprintf(app->mod_root, sizeof(app->mod_root), "%s", argv[++i]);
         } else if (strcmp(argv[i], "--characters") == 0) {
             app->tool = APP_TOOL_CHARACTERS;
+        } else if (strcmp(argv[i], "--countries") == 0) {
+            app->tool = APP_TOOL_COUNTRIES;
         }
     }
 }
@@ -773,6 +818,7 @@ int main(int argc, char **argv)
     app.font = open_system_font(18);
     app.font_small = open_system_font(13);
     character_ui_init(&app.characters, app.game_root, app.mod_root);
+    country_ui_init(&app.countries);
     if (!app.game_root[0]) {
         snprintf(app.status, sizeof(app.status), "HOI4 introuvable : appuie sur G pour choisir son dossier.");
     } else {
@@ -798,9 +844,36 @@ int main(int argc, char **argv)
                     SDL_StopTextInput(app.window);
                     continue;
                 }
+                if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN
+                    && event.button.button == SDL_BUTTON_LEFT
+                    && event.button.y < 48
+                    && event.button.x >= 330 && event.button.x < 474) {
+                    app.tool = APP_TOOL_COUNTRIES;
+                    SDL_StopTextInput(app.window);
+                    continue;
+                }
                 character_ui_handle_event(&app.characters,
                                           app.window, app.renderer, &event,
                                           app.game_root, app.mod_root);
+                continue;
+            }
+            if (app.tool == APP_TOOL_COUNTRIES) {
+                if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN
+                    && event.button.button == SDL_BUTTON_LEFT
+                    && event.button.y < 48) {
+                    if (event.button.x >= 18 && event.button.x < 138) {
+                        app.tool = APP_TOOL_MAP;
+                        SDL_StopTextInput(app.window);
+                        continue;
+                    }
+                    if (event.button.x >= 146 && event.button.x < 322) {
+                        app.tool = APP_TOOL_CHARACTERS;
+                        SDL_StopTextInput(app.window);
+                        continue;
+                    }
+                }
+                country_ui_handle_event(&app.countries, app.window, &event,
+                                        app.game_root, app.mod_root);
                 continue;
             }
             switch (event.type) {
@@ -819,6 +892,9 @@ int main(int argc, char **argv)
                 } else if (event.button.y < 42) {
                     if (event.button.x >= 620 && event.button.x < 762) {
                         app.tool = APP_TOOL_CHARACTERS;
+                        app.dragging = false;
+                    } else if (event.button.x >= 770 && event.button.x < 900) {
+                        app.tool = APP_TOOL_COUNTRIES;
                         app.dragging = false;
                     } else if (event.button.x >= 250 && event.button.x < 328)
                         set_view_mode(&app, HOI4_VIEW_STATES);

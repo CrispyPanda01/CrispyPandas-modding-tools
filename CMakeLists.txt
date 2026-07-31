@@ -18,6 +18,8 @@ add_executable(crispy-pandas WIN32
     src/character_creator.c
     src/portrait_image.c
     src/character_ui.c
+    src/country_creator.c
+    src/country_ui.c
 )
 
 target_include_directories(crispy-pandas PRIVATE src)
@@ -65,6 +67,7 @@ if(BUILD_TESTING)
         src/province_transfer.c
         src/character_creator.c
         src/portrait_image.c
+        src/country_creator.c
     )
     target_include_directories(hoi4-parser-tests PRIVATE src)
     target_compile_definitions(hoi4-parser-tests PRIVATE _CRT_SECURE_NO_WARNINGS)

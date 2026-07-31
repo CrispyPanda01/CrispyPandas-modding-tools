@@ -16,6 +16,21 @@ version contient un visualisateur de carte écrit en C11.
 - contours des états maintenus dans les modes Provinces et Régions stratégiques ;
 - survol et informations propres à l'élément affiché.
 
+## Créateur de pays
+
+L'onglet **Créateur de pays** génère directement dans le mod sélectionné :
+
+- le tag dans `common/country_tags/zz_crispy_pandas_countries.txt` ;
+- les couleurs principale et d'interface ;
+- le fichier historique avec capitale, parti et popularités ;
+- toutes les clés de localisation anglaises avec UTF-8 BOM ;
+- facultativement, des drapeaux placeholders en 82x52, 41x26 et 10x7.
+
+Le formulaire permet de choisir la culture graphique et le parti dirigeant. La
+collision de tag est vérifiée dans le `colors.txt` du mod lorsqu'il existe ;
+sinon, le `colors.txt` vanilla sert de référence. Les fichiers sont écrits en
+une transaction : si une étape échoue, ils sont restaurés.
+
 ## Prérequis Windows
 
 - CMake 3.20 ou plus récent ;

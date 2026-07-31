@@ -1,5 +1,6 @@
 #include "hoi4_map.h"
 #include "character_creator.h"
+#include "country_creator.h"
 #include "path_utils.h"
 #include "province_transfer.h"
 #include "state_edit.h"
@@ -620,6 +621,137 @@ cleanup:
     return failure;
 }
 
+static int test_country_creator(void)
+{
+    char cwd[CP_PATH_MAX] = "", root[CP_PATH_MAX] = "";
+    char game[CP_PATH_MAX] = "", mod[CP_PATH_MAX] = "";
+    char path[CP_PATH_MAX] = "", common[CP_PATH_MAX] = "";
+    char countries[CP_PATH_MAX] = "";
+    CountryCreateRequest request;
+    CountryCreateResult result = {0}, collision = {0};
+    char *tags = NULL, *colors = NULL, *history = NULL, *loc = NULL;
+    DWORD pid = GetCurrentProcessId();
+    int failure = 0, i;
+
+    GetCurrentDirectoryA(sizeof(cwd), cwd);
+    snprintf(root, sizeof(root), "%.4000s\\country-fixture-%lu",
+             cwd, (unsigned long)pid);
+    cp_path_join(game, sizeof(game), root, "game");
+    cp_path_join(mod, sizeof(mod), root, "mod");
+    CreateDirectoryA(root, NULL);
+    CreateDirectoryA(game, NULL);
+    CreateDirectoryA(mod, NULL);
+    cp_path_join(common, sizeof(common), game, "common");
+    CreateDirectoryA(common, NULL);
+    cp_path_join(countries, sizeof(countries), common, "countries");
+    CreateDirectoryA(countries, NULL);
+    cp_path_join(path, sizeof(path), countries, "_western_european.txt");
+    write_fixture(path, "graphical_culture = western_european_gfx\n");
+
+    country_create_request_defaults(&request);
+    snprintf(request.tag, sizeof(request.tag), "ZQP");
+    snprintf(request.name, sizeof(request.name), "Pays \"Test\"");
+    snprintf(request.adjective, sizeof(request.adjective), "Testois");
+    snprintf(request.definite_name, sizeof(request.definite_name),
+             "le Pays \"Test\"");
+    request.capital = 42;
+    request.ruling_party = COUNTRY_IDEOLOGY_FASCISM;
+    request.color[0] = 66; request.color[1] = 34; request.color[2] = 79;
+    request.color_ui[0] = 82; request.color_ui[1] = 44; request.color_ui[2] = 99;
+    request.create_placeholder_flags = true;
+    cp_path_join(path, sizeof(path), countries, "colors.txt");
+    write_fixture(path, "ZQP = { color = rgb { 1 2 3 } }\n");
+    if (country_creator_validate(&request, game, mod,
+                                 collision.error, sizeof(collision.error))
+        || !strstr(collision.error, "vanilla")) {
+        fprintf(stderr, "Le colors.txt vanilla n'a pas bloqué le tag: %s\n",
+                collision.error);
+        failure = 50;
+        goto cleanup;
+    }
+    cp_path_join(path, sizeof(path), mod, "common");
+    CreateDirectoryA(path, NULL);
+    cp_path_join(path, sizeof(path), mod, "common\\countries");
+    CreateDirectoryA(path, NULL);
+    cp_path_join(path, sizeof(path), mod, "common\\countries\\colors.txt");
+    write_fixture(path, "ABC = { color = rgb { 9 9 9 } }\n");
+    if (!country_creator_execute(&request, game, mod, &result)) {
+        fprintf(stderr, "Création de pays impossible: %s\n", result.error);
+        failure = 50;
+        goto cleanup;
+    }
+    tags = read_fixture(result.tag_file);
+    colors = read_fixture(result.colors_file);
+    history = read_fixture(result.history_file);
+    loc = read_fixture(result.localisation_file);
+    if (result.changed_files != 7 || !tags || !colors || !history || !loc
+        || !strstr(tags, "ZQP = \"countries/_western_european.txt\"")
+        || !strstr(colors, "color = rgb { 66 34 79 }")
+        || !strstr(colors, "color_ui = rgb { 82 44 99 }")
+        || !strstr(history, "capital = 42")
+        || !strstr(history, "ruling_party = fascism")
+        || !strstr(history, "fascism = 100")
+        || (unsigned char)loc[0] != 0xEF
+        || (unsigned char)loc[1] != 0xBB
+        || (unsigned char)loc[2] != 0xBF
+        || !strstr(loc, "ZQP_fascism: \"Pays \\\"Test\\\"\"")
+        || !province_transfer_validate_syntax(colors,
+                                              result.error, sizeof(result.error))
+        || !province_transfer_validate_syntax(history,
+                                              result.error, sizeof(result.error))) {
+        fprintf(stderr, "Sortie pays invalide: %s\n", result.error);
+        failure = 51;
+        goto cleanup;
+    }
+    for (i = 0; i < 3; ++i) {
+        FILE *flag = fopen(result.flag_files[i], "rb");
+        unsigned char header[18];
+        if (!flag || fread(header, 1, sizeof(header), flag) != sizeof(header)
+            || header[2] != 2) {
+            if (flag) fclose(flag);
+            fprintf(stderr, "Drapeau pays invalide: %s\n", result.flag_files[i]);
+            failure = 52;
+            goto cleanup;
+        }
+        fclose(flag);
+    }
+    if (country_creator_execute(&request, game, mod, &collision)
+        || !strstr(collision.error, "existe déjà")) {
+        fprintf(stderr, "La collision de tag n'a pas été refusée: %s\n",
+                collision.error);
+        failure = 53;
+    }
+
+cleanup:
+    free(tags); free(colors); free(history); free(loc);
+    DeleteFileA(result.tag_file);
+    DeleteFileA(result.colors_file);
+    DeleteFileA(result.history_file);
+    DeleteFileA(result.localisation_file);
+    for (i = 0; i < 3; ++i) DeleteFileA(result.flag_files[i]);
+    cp_path_join(path, sizeof(path), countries, "_western_european.txt");
+    DeleteFileA(path);
+    cp_path_join(path, sizeof(path), countries, "colors.txt");
+    DeleteFileA(path);
+    cp_path_join(path, sizeof(path), mod, "common\\country_tags"); RemoveDirectoryA(path);
+    cp_path_join(path, sizeof(path), mod, "common\\countries"); RemoveDirectoryA(path);
+    cp_path_join(path, sizeof(path), mod, "common"); RemoveDirectoryA(path);
+    cp_path_join(path, sizeof(path), mod, "history\\countries"); RemoveDirectoryA(path);
+    cp_path_join(path, sizeof(path), mod, "history"); RemoveDirectoryA(path);
+    cp_path_join(path, sizeof(path), mod, "localisation\\english"); RemoveDirectoryA(path);
+    cp_path_join(path, sizeof(path), mod, "localisation"); RemoveDirectoryA(path);
+    cp_path_join(path, sizeof(path), mod, "gfx\\flags\\medium"); RemoveDirectoryA(path);
+    cp_path_join(path, sizeof(path), mod, "gfx\\flags\\small"); RemoveDirectoryA(path);
+    cp_path_join(path, sizeof(path), mod, "gfx\\flags"); RemoveDirectoryA(path);
+    cp_path_join(path, sizeof(path), mod, "gfx"); RemoveDirectoryA(path);
+    RemoveDirectoryA(countries);
+    RemoveDirectoryA(common);
+    RemoveDirectoryA(game);
+    RemoveDirectoryA(mod);
+    RemoveDirectoryA(root);
+    return failure;
+}
+
 int main(int argc, char **argv)
 {
     char path[CP_PATH_MAX];
@@ -628,6 +760,8 @@ int main(int argc, char **argv)
     edit_result = test_province_transfer();
     if (edit_result) return edit_result;
     edit_result = test_character_creator();
+    if (edit_result) return edit_result;
+    edit_result = test_country_creator();
     if (edit_result) return edit_result;
     if (!cp_path_join(path, sizeof(path), "C:\\Games\\HOI4", "map\\provinces.bmp")) return 1;
     if (strcmp(path, "C:\\Games\\HOI4\\map\\provinces.bmp") != 0) {

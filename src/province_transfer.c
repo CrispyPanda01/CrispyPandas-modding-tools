@@ -1548,13 +1548,16 @@ static int next_state_id(const Hoi4Map *map)
 static char *build_state_localization(const char *existing,
                                       const char *key,
                                       int state_id,
+                                      const char *state_name,
                                       char *error,
                                       size_t error_size)
 {
     TextBuffer output = {0};
-    char entry[256];
+    char entry[640];
+    char escaped[512];
     char needle[80];
     size_t length = existing ? strlen(existing) : 0;
+    size_t source_at = 0, escaped_at = 0;
     snprintf(needle, sizeof(needle), "\n %s:", key);
     if (existing && (strstr(existing, needle)
         || (strncmp(existing, key, strlen(key)) == 0
@@ -1572,7 +1575,28 @@ static char *build_state_localization(const char *existing,
         free(output.data);
         return NULL;
     }
-    snprintf(entry, sizeof(entry), " %s:0 \"New State %d\"\r\n", key, state_id);
+    if (state_name && state_name[0]) {
+        while (state_name[source_at] && escaped_at + 2 < sizeof(escaped)) {
+            unsigned char c = (unsigned char)state_name[source_at++];
+            if (c == '\r' || c == '\n') {
+                snprintf(error, error_size,
+                         "Le nom de l'état ne peut pas contenir de retour à la ligne.");
+                free(output.data);
+                return NULL;
+            }
+            if (c == '\\' || c == '"') escaped[escaped_at++] = '\\';
+            escaped[escaped_at++] = (char)c;
+        }
+        if (state_name[source_at]) {
+            snprintf(error, error_size, "Le nom de l'état est trop long.");
+            free(output.data);
+            return NULL;
+        }
+        escaped[escaped_at] = '\0';
+    } else {
+        snprintf(escaped, sizeof(escaped), "New State %d", state_id);
+    }
+    snprintf(entry, sizeof(entry), " %s:0 \"%s\"\r\n", key, escaped);
     if (!buffer_append(&output, entry)) {
         free(output.data);
         return NULL;
@@ -1580,10 +1604,11 @@ static char *build_state_localization(const char *existing,
     return output.data;
 }
 
-bool province_state_create_execute(const Hoi4Map *map,
-                                   const char *mod_root,
-                                   const uint8_t *selected_provinces,
-                                   ProvinceStateCreateResult *result)
+bool province_state_create_execute_named(const Hoi4Map *map,
+                                         const char *mod_root,
+                                         const uint8_t *selected_provinces,
+                                         const char *state_name,
+                                         ProvinceStateCreateResult *result)
 {
     uint8_t *moving = NULL;
     uint8_t *affected_regions = NULL;
@@ -1898,6 +1923,7 @@ bool province_state_create_execute(const Hoi4Map *map,
         localized = build_state_localization(existing,
                                              result->localization_key,
                                              new_state_id,
+                                             state_name,
                                              result->error,
                                              sizeof(result->error));
         free(existing);
@@ -1930,4 +1956,14 @@ cleanup:
     assets_free(&incoming);
     changes_free(&changes);
     return success;
+}
+
+bool province_state_create_execute(const Hoi4Map *map,
+                                   const char *mod_root,
+                                   const uint8_t *selected_provinces,
+                                   ProvinceStateCreateResult *result)
+{
+    return province_state_create_execute_named(map, mod_root,
+                                               selected_provinces, NULL,
+                                               result);
 }

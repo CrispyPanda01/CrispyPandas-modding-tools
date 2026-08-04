@@ -31,6 +31,12 @@ typedef struct {
     char error[512];
 } EditDialog;
 
+typedef struct {
+    bool open;
+    char name[256];
+    char error[512];
+} CreateStateDialog;
+
 typedef enum {
     APP_TOOL_MAP,
     APP_TOOL_CHARACTERS,
@@ -52,6 +58,7 @@ typedef struct {
     float offset_y;
     int hover_entity;
     Hoi4ViewMode view_mode;
+    bool show_victory_points;
     uint8_t selected[3][HOI4_MAX_STATES];
     size_t selected_count[3];
     bool dragging;
@@ -61,6 +68,7 @@ typedef struct {
     float last_mouse_x;
     float last_mouse_y;
     EditDialog edit_dialog;
+    CreateStateDialog create_state_dialog;
     AppTool tool;
     CharacterCreatorUI characters;
     CountryCreatorUI countries;
@@ -280,24 +288,23 @@ static void transfer_selected_provinces_at(App *app, float mouse_x, float mouse_
              result.changed_strategic_regions > 1 ? "s" : "");
 }
 
-static void create_state_from_selected_provinces(App *app)
+static bool execute_state_creation(App *app, const char *state_name)
 {
     ProvinceStateCreateResult result;
-    if (app->view_mode != HOI4_VIEW_PROVINCES) return;
+    if (app->view_mode != HOI4_VIEW_PROVINCES) return false;
     if (app->selected_count[HOI4_VIEW_PROVINCES] == 0) {
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_WARNING,
                                  "Création impossible",
                                  "Sélectionnez une ou plusieurs provinces terrestres.",
                                  app->window);
-        return;
+        return false;
     }
-    if (!province_state_create_execute(&app->map, app->mod_root,
-                                       app->selected[HOI4_VIEW_PROVINCES],
-                                       &result)) {
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,
-                                 "Création annulée",
-                                 result.error, app->window);
-        return;
+    if (!province_state_create_execute_named(
+            &app->map, app->mod_root,
+            app->selected[HOI4_VIEW_PROVINCES], state_name, &result)) {
+        snprintf(app->create_state_dialog.error,
+                 sizeof(app->create_state_dialog.error), "%.500s", result.error);
+        return false;
     }
     load_map(app);
     set_view_mode(app, HOI4_VIEW_PROVINCES);
@@ -311,6 +318,22 @@ static void create_state_from_selected_provinces(App *app)
              result.changed_strategic_regions > 1 ? "s" : "",
              result.changed_strategic_regions > 1 ? "s" : "",
              result.changed_strategic_regions > 1 ? "s" : "");
+    return true;
+}
+
+static void open_create_state_dialog(App *app)
+{
+    if (app->view_mode != HOI4_VIEW_PROVINCES
+        || app->selected_count[HOI4_VIEW_PROVINCES] == 0) {
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_WARNING,
+                                 "Création impossible",
+                                 "Sélectionnez une ou plusieurs provinces terrestres.",
+                                 app->window);
+        return;
+    }
+    memset(&app->create_state_dialog, 0, sizeof(app->create_state_dialog));
+    app->create_state_dialog.open = true;
+    SDL_StartTextInput(app->window);
 }
 
 static void zoom_at(App *app, float mouse_x, float mouse_y, float wheel)
@@ -364,6 +387,17 @@ static void render_toolbar(App *app, int window_width)
     draw_text(app, app->font_small,
               "G Jeu   M Mod   R Recharger   F Ajuster   molette Zoom   glisser Déplacer",
               18, 37, muted);
+    {
+        SDL_FRect vp_button = {720, 36, 82, 24};
+        if (app->show_victory_points)
+            SDL_SetRenderDrawColor(app->renderer, 180, 65, 54, 255);
+        else
+            SDL_SetRenderDrawColor(app->renderer, 44, 51, 67, 255);
+        SDL_RenderFillRect(app->renderer, &vp_button);
+        draw_text(app, app->font_small,
+                  app->show_victory_points ? "VP  ON" : "VP  OFF",
+                  735, 40, white);
+    }
     if (app->hover_entity) {
         if (app->view_mode == HOI4_VIEW_STATES) {
             const Hoi4State *state = hoi4_map_state(&app->map, app->hover_entity);
@@ -402,6 +436,41 @@ static void render_toolbar(App *app, int window_width)
         snprintf(line, sizeof(line), "%.470s   |   Sélection : %zu",
                  app->status, app->selected_count[app->view_mode]);
         draw_text(app, app->font_small, line, (float)window_width * 0.57f, 23, muted);
+    }
+}
+
+static void render_victory_points(App *app, int window_width, int window_height)
+{
+    size_t state_id, i;
+    char value[24];
+    for (state_id = 1; state_id < HOI4_MAX_STATES; ++state_id) {
+        const Hoi4State *state = hoi4_map_state(&app->map, (int)state_id);
+        if (!state) continue;
+        for (i = 0; i < state->victory_point_count; ++i) {
+            const Hoi4VictoryPoint *vp = &state->victory_points[i];
+            float x, y;
+            SDL_FRect horizontal, vertical, center;
+            if (vp->map_x < 0 || vp->map_y < 0) continue;
+            x = app->offset_x + ((float)vp->map_x + 0.5f) * app->zoom;
+            y = app->offset_y + ((float)vp->map_y + 0.5f) * app->zoom;
+            if (x < -30 || y < TOOLBAR_HEIGHT - 20
+                || x > window_width + 30 || y > window_height + 20) continue;
+            horizontal = (SDL_FRect){x - 7, y - 3, 14, 6};
+            vertical = (SDL_FRect){x - 3, y - 7, 6, 14};
+            center = (SDL_FRect){x - 3, y - 3, 6, 6};
+            SDL_SetRenderDrawColor(app->renderer, 35, 20, 20, 235);
+            SDL_RenderFillRect(app->renderer, &horizontal);
+            SDL_RenderFillRect(app->renderer, &vertical);
+            SDL_SetRenderDrawColor(app->renderer, 235, 73, 59, 255);
+            SDL_RenderFillRect(app->renderer, &center);
+            if (app->zoom >= 0.35f) {
+                snprintf(value, sizeof(value), "%d", vp->value);
+                draw_text(app, app->font_small, value, x + 8, y - 6,
+                          (SDL_Color){20, 15, 15, 255});
+                draw_text(app, app->font_small, value, x + 7, y - 7,
+                          (SDL_Color){255, 235, 180, 255});
+            }
+        }
     }
 }
 
@@ -555,6 +624,76 @@ static void render_edit_dialog(App *app)
     draw_text(app, app->font_small, "Appliquer", apply.x + 18, apply.y + 10, white);
 }
 
+static void create_state_dialog_layout(App *app, SDL_FRect *panel,
+                                       SDL_FRect *field,
+                                       SDL_FRect *cancel, SDL_FRect *create)
+{
+    int width, height;
+    SDL_GetWindowSize(app->window, &width, &height);
+    *panel = (SDL_FRect){((float)width - 620) * 0.5f,
+                         ((float)height - 290) * 0.5f, 620, 290};
+    *field = (SDL_FRect){panel->x + 28, panel->y + 105, 564, 42};
+    *cancel = (SDL_FRect){panel->x + 386, panel->y + 226, 96, 38};
+    *create = (SDL_FRect){panel->x + 496, panel->y + 226, 96, 38};
+}
+
+static void render_create_state_dialog(App *app)
+{
+    SDL_FRect panel, field, cancel, create;
+    SDL_Color white = {238, 242, 250, 255};
+    SDL_Color muted = {164, 174, 194, 255};
+    SDL_Color value_color = {239, 242, 249, 255};
+    int width, height, text_width = 0;
+    if (!app->create_state_dialog.open) return;
+    create_state_dialog_layout(app, &panel, &field, &cancel, &create);
+    SDL_GetWindowSize(app->window, &width, &height);
+    SDL_SetRenderDrawBlendMode(app->renderer, SDL_BLENDMODE_BLEND);
+    {
+        SDL_FRect overlay = {0, 0, (float)width, (float)height};
+        SDL_SetRenderDrawColor(app->renderer, 0, 0, 0, 155);
+        SDL_RenderFillRect(app->renderer, &overlay);
+    }
+    SDL_SetRenderDrawColor(app->renderer, 31, 37, 50, 255);
+    SDL_RenderFillRect(app->renderer, &panel);
+    draw_text(app, app->font, "Créer un nouvel état",
+              panel.x + 28, panel.y + 22, white);
+    draw_text(app, app->font_small,
+              "Nom affiché dans le jeu — laisse vide pour utiliser New State <ID>.",
+              panel.x + 28, panel.y + 55, muted);
+    draw_text(app, app->font_small, "Nom de l'état",
+              panel.x + 28, panel.y + 84, white);
+    SDL_SetRenderDrawColor(app->renderer, 62, 137, 224, 255);
+    SDL_RenderFillRect(app->renderer, &field);
+    {
+        SDL_FRect inner = {field.x + 2, field.y + 2,
+                           field.w - 4, field.h - 4};
+        SDL_SetRenderDrawColor(app->renderer, 27, 33, 45, 255);
+        SDL_RenderFillRect(app->renderer, &inner);
+    }
+    draw_text(app, app->font,
+              app->create_state_dialog.name[0]
+                  ? app->create_state_dialog.name : "Nom automatique",
+              field.x + 10, field.y + 10,
+              app->create_state_dialog.name[0] ? value_color : muted);
+    TTF_GetStringSize(app->font, app->create_state_dialog.name, 0,
+                      &text_width, NULL);
+    SDL_SetRenderDrawColor(app->renderer, 225, 232, 244, 255);
+    SDL_RenderLine(app->renderer, field.x + 11 + text_width, field.y + 9,
+                   field.x + 11 + text_width, field.y + 31);
+    if (app->create_state_dialog.error[0])
+        draw_text(app, app->font_small, app->create_state_dialog.error,
+                  panel.x + 28, panel.y + 172,
+                  (SDL_Color){244, 112, 112, 255});
+    SDL_SetRenderDrawColor(app->renderer, 65, 74, 91, 255);
+    SDL_RenderFillRect(app->renderer, &cancel);
+    SDL_SetRenderDrawColor(app->renderer, 48, 112, 196, 255);
+    SDL_RenderFillRect(app->renderer, &create);
+    draw_text(app, app->font_small, "Annuler",
+              cancel.x + 22, cancel.y + 10, white);
+    draw_text(app, app->font_small, "Créer",
+              create.x + 26, create.y + 10, white);
+}
+
 static void render(App *app)
 {
     int width, height;
@@ -567,10 +706,13 @@ static void render(App *app)
             app->map.width * app->zoom, app->map.height * app->zoom
         };
         SDL_RenderTexture(app->renderer, app->map_texture, NULL, &target);
+        if (app->show_victory_points)
+            render_victory_points(app, width, height);
     }
     if (app->tool == APP_TOOL_MAP) {
         render_toolbar(app, width);
         render_edit_dialog(app);
+        render_create_state_dialog(app);
     } else if (app->tool == APP_TOOL_CHARACTERS) {
         character_ui_render(&app->characters, app->window, app->renderer,
                             app->font, app->font_small);
@@ -615,6 +757,7 @@ static void handle_key(App *app, SDL_Keycode key)
     else if (key == SDLK_M) choose_mod(app);
     else if (key == SDLK_R) load_map(app);
     else if (key == SDLK_F || key == SDLK_HOME) fit_map(app);
+    else if (key == SDLK_V) app->show_victory_points = !app->show_victory_points;
     else if (key == SDLK_1) set_view_mode(app, HOI4_VIEW_STATES);
     else if (key == SDLK_2) set_view_mode(app, HOI4_VIEW_PROVINCES);
     else if (key == SDLK_3) set_view_mode(app, HOI4_VIEW_STRATEGIC_REGIONS);
@@ -760,6 +903,72 @@ static bool handle_edit_dialog_event(App *app, const SDL_Event *event)
     return true;
 }
 
+static void close_create_state_dialog(App *app)
+{
+    app->create_state_dialog.open = false;
+    SDL_StopTextInput(app->window);
+}
+
+static void append_state_name(CreateStateDialog *dialog, const char *text)
+{
+    size_t length = strlen(dialog->name);
+    while (*text && length + 1 < sizeof(dialog->name)) {
+        unsigned char c = (unsigned char)*text++;
+        if (c != '\r' && c != '\n') dialog->name[length++] = (char)c;
+    }
+    dialog->name[length] = '\0';
+    dialog->error[0] = '\0';
+}
+
+static void erase_last_utf8_character(char *text)
+{
+    size_t length = strlen(text);
+    if (!length) return;
+    length--;
+    while (length && ((unsigned char)text[length] & 0xC0) == 0x80) length--;
+    text[length] = '\0';
+}
+
+static bool handle_create_state_dialog_event(App *app,
+                                             const SDL_Event *event)
+{
+    SDL_FRect panel, field, cancel, create;
+    CreateStateDialog *dialog = &app->create_state_dialog;
+    bool ctrl;
+    if (!dialog->open) return false;
+    create_state_dialog_layout(app, &panel, &field, &cancel, &create);
+    (void)panel; (void)field;
+    if (event->type == SDL_EVENT_TEXT_INPUT) {
+        append_state_name(dialog, event->text.text);
+    } else if (event->type == SDL_EVENT_KEY_DOWN) {
+        ctrl = (event->key.mod & SDL_KMOD_CTRL) != 0;
+        if (event->key.key == SDLK_ESCAPE) {
+            close_create_state_dialog(app);
+        } else if (event->key.key == SDLK_BACKSPACE) {
+            erase_last_utf8_character(dialog->name);
+            dialog->error[0] = '\0';
+        } else if (ctrl && event->key.key == SDLK_C) {
+            SDL_SetClipboardText(dialog->name);
+        } else if (ctrl && event->key.key == SDLK_V) {
+            char *clipboard = SDL_GetClipboardText();
+            append_state_name(dialog, clipboard ? clipboard : "");
+            SDL_free(clipboard);
+        } else if (event->key.key == SDLK_RETURN
+                   || event->key.key == SDLK_KP_ENTER) {
+            if (execute_state_creation(app, dialog->name))
+                close_create_state_dialog(app);
+        }
+    } else if (event->type == SDL_EVENT_MOUSE_BUTTON_DOWN
+               && event->button.button == SDL_BUTTON_LEFT) {
+        if (point_in_rect(event->button.x, event->button.y, &cancel))
+            close_create_state_dialog(app);
+        else if (point_in_rect(event->button.x, event->button.y, &create)
+                 && execute_state_creation(app, dialog->name))
+            close_create_state_dialog(app);
+    }
+    return true;
+}
+
 static void parse_arguments(App *app, int argc, char **argv)
 {
     int i;
@@ -835,6 +1044,10 @@ int main(int argc, char **argv)
                 handle_edit_dialog_event(&app, &event);
                 continue;
             }
+            if (app.create_state_dialog.open) {
+                handle_create_state_dialog_event(&app, &event);
+                continue;
+            }
             if (app.tool == APP_TOOL_CHARACTERS) {
                 if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN
                     && event.button.button == SDL_BUTTON_LEFT
@@ -889,6 +1102,10 @@ int main(int argc, char **argv)
                     && event.button.y >= TOOLBAR_HEIGHT) {
                     app.dragging = false;
                     open_state_at(&app, event.button.x, event.button.y);
+                } else if (event.button.button == SDL_BUTTON_LEFT
+                           && event.button.x >= 720 && event.button.x < 802
+                           && event.button.y >= 36 && event.button.y < 60) {
+                    app.show_victory_points = !app.show_victory_points;
                 } else if (event.button.y < 42) {
                     if (event.button.x >= 620 && event.button.x < 762) {
                         app.tool = APP_TOOL_CHARACTERS;
@@ -920,7 +1137,7 @@ int main(int argc, char **argv)
                     SDL_Keymod modifiers = SDL_GetModState();
                     if ((modifiers & SDL_KMOD_ALT)
                         && app.view_mode == HOI4_VIEW_PROVINCES)
-                        create_state_from_selected_provinces(&app);
+                        open_create_state_dialog(&app);
                     else {
                         bool extend = (modifiers & SDL_KMOD_SHIFT) != 0;
                         select_entity_at(&app, event.button.x, event.button.y, extend);
@@ -962,6 +1179,7 @@ int main(int argc, char **argv)
 
     hoi4_map_free(&app.map);
     character_ui_free(&app.characters);
+    country_ui_free(&app.countries);
     if (app.font_small) TTF_CloseFont(app.font_small);
     if (app.font) TTF_CloseFont(app.font);
     if (app.map_texture) SDL_DestroyTexture(app.map_texture);

@@ -154,6 +154,7 @@ void hoi4_map_free(Hoi4Map *map)
         for (i = 0; i < HOI4_MAX_STATES; ++i) {
             if (map->states[i]) {
                 free(map->states[i]->provinces);
+                free(map->states[i]->victory_points);
                 free(map->states[i]);
             }
         }
@@ -305,6 +306,7 @@ static Hoi4State *parse_state_file(const char *path, const char *filename)
     bool in_provinces = false;
     int provinces_depth = -1;
     size_t capacity = 0;
+    size_t vp_capacity = 0;
     if (!text) return NULL;
     state = calloc(1, sizeof(*state));
     if (!state) { free(text); return NULL; }
@@ -355,6 +357,30 @@ static Hoi4State *parse_state_file(const char *path, const char *filename)
         } else if (token_is(&token, "owner") && history_depth > 0 && depth == history_depth) {
             Token eq = lexer_next(&lex), value = lexer_next(&lex);
             if (eq.type == TOK_EQUALS) snprintf(state->owner, sizeof(state->owner), "%.7s", value.text);
+        } else if (token_is(&token, "victory_points")
+                   && history_depth > 0 && depth == history_depth) {
+            Token eq = lexer_next(&lex), open = lexer_next(&lex);
+            if (eq.type == TOK_EQUALS && open.type == TOK_OPEN) {
+                Token province = lexer_next(&lex);
+                Token value = lexer_next(&lex);
+                Token close = lexer_next(&lex);
+                int province_id = atoi(province.text);
+                int vp_value = atoi(value.text);
+                if (province.type == TOK_WORD && value.type == TOK_WORD
+                    && close.type == TOK_CLOSE && province_id > 0
+                    && province_id < HOI4_MAX_PROVINCES && vp_value > 0) {
+                    if (state->victory_point_count == vp_capacity) {
+                        size_t next = vp_capacity ? vp_capacity * 2 : 4;
+                        Hoi4VictoryPoint *grown = realloc(
+                            state->victory_points, next * sizeof(*grown));
+                        if (!grown) break;
+                        state->victory_points = grown;
+                        vp_capacity = next;
+                    }
+                    state->victory_points[state->victory_point_count++] =
+                        (Hoi4VictoryPoint){province_id, vp_value, -1, -1};
+                }
+            }
         } else if (token_is(&token, "provinces")) {
             Token eq = lexer_next(&lex), open = lexer_next(&lex);
             if (eq.type == TOK_EQUALS && open.type == TOK_OPEN) {
@@ -367,6 +393,7 @@ static Hoi4State *parse_state_file(const char *path, const char *filename)
     free(text);
     if (state->id <= 0 || state->id >= HOI4_MAX_STATES || state->province_count == 0) {
         free(state->provinces);
+        free(state->victory_points);
         free(state);
         return NULL;
     }
@@ -382,6 +409,7 @@ static bool state_visitor(const char *path, const char *name, void *user)
     if (state) {
         if (context->map->states[state->id]) {
             free(context->map->states[state->id]->provinces);
+            free(context->map->states[state->id]->victory_points);
             free(context->map->states[state->id]);
         } else {
             context->map->loaded_state_count++;
@@ -658,6 +686,43 @@ static bool load_bmp_fast(Hoi4Map *map, const char *path, const ColorTable *colo
     return true;
 }
 
+static void locate_victory_points(Hoi4Map *map)
+{
+    size_t state_id, i;
+    for (state_id = 1; state_id < HOI4_MAX_STATES; ++state_id) {
+        Hoi4State *state = map->states[state_id];
+        if (!state) continue;
+        for (i = 0; i < state->victory_point_count; ++i) {
+            Hoi4VictoryPoint *vp = &state->victory_points[i];
+            const Hoi4Province *province = hoi4_map_province(
+                map, vp->province_id);
+            int center_x, center_y, x, y;
+            int64_t best_distance = INT64_MAX;
+            if (!province || province->max_x < province->min_x
+                || province->max_y < province->min_y) continue;
+            center_x = (province->min_x + province->max_x) / 2;
+            center_y = (province->min_y + province->max_y) / 2;
+            for (y = province->min_y; y <= province->max_y; ++y) {
+                for (x = province->min_x; x <= province->max_x; ++x) {
+                    int64_t dx, dy, distance;
+                    if (map->province_at[(size_t)y * map->width + x]
+                        != vp->province_id) continue;
+                    dx = x - center_x;
+                    dy = y - center_y;
+                    distance = dx * dx + dy * dy;
+                    if (distance < best_distance) {
+                        best_distance = distance;
+                        vp->map_x = x;
+                        vp->map_y = y;
+                        if (!distance) break;
+                    }
+                }
+                if (!best_distance) break;
+            }
+        }
+    }
+}
+
 bool hoi4_map_load(Hoi4Map *map, const char *game_root, const char *mod_root)
 {
     char path[CP_PATH_MAX];
@@ -699,6 +764,7 @@ bool hoi4_map_load(Hoi4Map *map, const char *game_root, const char *mod_root)
     assign_provinces_to_entities(map);
     selected = layered_path(path, sizeof(path), game_root, mod_root, "map\\provinces.bmp");
     if (!selected || !load_bmp_fast(map, selected, &colors)) { free(colors.slots); return false; }
+    locate_victory_points(map);
     free(colors.slots);
     hoi4_map_render_mode(map, HOI4_VIEW_STATES);
     return true;

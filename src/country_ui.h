@@ -13,10 +13,19 @@ typedef struct {
     int active_field;
     char capital[16];
     char colors[6][4];
+    SDL_Texture *spectrum_texture;
+    SDL_Texture *hue_texture;
+    bool color_picker_open;
+    float picker_hue;
+    float picker_saturation;
+    float picker_value;
+    float spectrum_texture_hue;
+    int picker_drag;
     char status[768];
 } CountryCreatorUI;
 
 void country_ui_init(CountryCreatorUI *ui);
+void country_ui_free(CountryCreatorUI *ui);
 void country_ui_reload(CountryCreatorUI *ui);
 void country_ui_render(CountryCreatorUI *ui, SDL_Window *window,
                        SDL_Renderer *renderer,

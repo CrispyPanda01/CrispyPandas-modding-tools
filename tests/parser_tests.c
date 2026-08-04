@@ -335,7 +335,9 @@ static int test_province_transfer(void)
         map.provinces[10].strategic_region_id = 1;
         selected[10] = 1;
         selected[20] = 1;
-        if (!province_state_create_execute(&map, mod, selected, &create_result)) {
+        if (!province_state_create_execute_named(&map, mod, selected,
+                                                 "Nouvel \"État\"",
+                                                 &create_result)) {
             fprintf(stderr, "Création d'état impossible: %s\n", create_result.error);
             failure = 28; goto cleanup_map;
         }
@@ -367,7 +369,8 @@ static int test_province_transfer(void)
             || !strstr(region1_result, "20")
             || strstr(region2_result, "20")
             || !strstr(localization_result, "l_english:")
-            || !strstr(localization_result, "STATE_3:0 \"New State 3\"")
+            || !strstr(localization_result,
+                       "STATE_3:0 \"Nouvel \\\"État\\\"\"")
             || !province_transfer_validate_syntax(created_result, error, sizeof(error))) {
             fprintf(stderr, "Résultat de création incorrect: %s\nNEW:\n%s\nLOC:\n%s\n",
                     error, created_result ? created_result : "(null)",
@@ -773,6 +776,7 @@ int main(int argc, char **argv)
         CharacterTraitCatalog live_traits = {0};
         const Hoi4State *state;
         size_t i;
+        size_t vp_count = 0;
         size_t state_pixel = (size_t)-1;
         uint32_t before;
         if (!character_trait_catalog_load(&live_traits, argv[1],
@@ -831,6 +835,26 @@ int main(int argc, char **argv)
             hoi4_map_free(&map);
             return 7;
         }
+        for (i = 1; i < HOI4_MAX_STATES; ++i) {
+            const Hoi4State *vp_state = hoi4_map_state(&map, (int)i);
+            size_t q;
+            if (!vp_state) continue;
+            for (q = 0; q < vp_state->victory_point_count; ++q) {
+                const Hoi4VictoryPoint *vp = &vp_state->victory_points[q];
+                if (vp->value <= 0 || vp->map_x < 0 || vp->map_y < 0) {
+                    fprintf(stderr, "Victory point invalide dans l'état %zu.\n", i);
+                    hoi4_map_free(&map);
+                    return 19;
+                }
+                vp_count++;
+            }
+        }
+        if (vp_count < 100) {
+            fprintf(stderr, "Trop peu de victory points chargés: %zu\n", vp_count);
+            hoi4_map_free(&map);
+            return 19;
+        }
+        printf("victory_points=%zu\n", vp_count);
         hoi4_map_render_mode(&map, HOI4_VIEW_PROVINCES);
         hoi4_map_render_mode(&map, HOI4_VIEW_STRATEGIC_REGIONS);
         hoi4_map_render_mode(&map, HOI4_VIEW_STATES);

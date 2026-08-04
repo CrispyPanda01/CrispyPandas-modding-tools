@@ -69,6 +69,7 @@ Contrôles :
 - `2` : mode Provinces ;
 - `3` : mode Régions stratégiques ;
 - `R` : recharger les fichiers ;
+- `V` ou le bouton `VP` : afficher ou masquer les victory points et leur valeur ;
 - `F` ou `Début` : ajuster toute la carte à la fenêtre ;
 - molette : zoomer sous le curseur ;
 - glisser avec un bouton de souris : déplacer la carte.
@@ -77,7 +78,7 @@ Contrôles :
 - en mode Provinces, clic droit sur un état : transférer les provinces
   sélectionnées vers cet état ;
 - en mode Provinces, `Alt` + clic gauche : créer un nouvel état avec les
-  provinces actuellement sélectionnées ;
+  provinces sélectionnées et choisir son nom (champ vide = nom automatique) ;
 - double-clic gauche sur un état : ouvrir son fichier source dans l'éditeur
   associé aux fichiers `.txt`.
 - `Ctrl` + `Entrée` : modifier l'owner, le controller et les cores des états

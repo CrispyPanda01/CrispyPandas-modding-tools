@@ -1,11 +1,21 @@
 #include "country_ui.h"
 
 #include <ctype.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #define COUNTRY_TOP 64.0f
+#define PICKER_X 720.0f
+#define PICKER_Y 108.0f
+#define SPECTRUM_X 744.0f
+#define SPECTRUM_Y 158.0f
+#define SPECTRUM_SIZE 256.0f
+#define HUE_X 1020.0f
+#define HUE_Y 158.0f
+#define HUE_WIDTH 28.0f
+#define HUE_HEIGHT 256.0f
 
 typedef struct {
     const char *label;
@@ -47,6 +57,73 @@ static void draw_text(SDL_Renderer *renderer, TTF_Font *font,
     SDL_DestroySurface(surface);
 }
 
+static void hsv_to_rgb(float hue, float saturation, float value,
+                       int *red, int *green, int *blue)
+{
+    float c = value * saturation;
+    float sector = hue / 60.0f;
+    float x = c * (1.0f - fabsf(fmodf(sector, 2.0f) - 1.0f));
+    float m = value - c;
+    float r = 0, g = 0, b = 0;
+    if (sector < 1) { r = c; g = x; }
+    else if (sector < 2) { r = x; g = c; }
+    else if (sector < 3) { g = c; b = x; }
+    else if (sector < 4) { g = x; b = c; }
+    else if (sector < 5) { r = x; b = c; }
+    else { r = c; b = x; }
+    *red = (int)((r + m) * 255.0f + 0.5f);
+    *green = (int)((g + m) * 255.0f + 0.5f);
+    *blue = (int)((b + m) * 255.0f + 0.5f);
+}
+
+static void rgb_to_hsv(int red, int green, int blue,
+                       float *hue, float *saturation, float *value)
+{
+    float r = SDL_clamp(red, 0, 255) / 255.0f;
+    float g = SDL_clamp(green, 0, 255) / 255.0f;
+    float b = SDL_clamp(blue, 0, 255) / 255.0f;
+    float maximum = SDL_max(r, SDL_max(g, b));
+    float minimum = SDL_min(r, SDL_min(g, b));
+    float delta = maximum - minimum;
+    *value = maximum;
+    *saturation = maximum <= 0.0f ? 0.0f : delta / maximum;
+    if (delta <= 0.0f) *hue = 0.0f;
+    else if (maximum == r) *hue = 60.0f * fmodf((g - b) / delta, 6.0f);
+    else if (maximum == g) *hue = 60.0f * (((b - r) / delta) + 2.0f);
+    else *hue = 60.0f * (((r - g) / delta) + 4.0f);
+    if (*hue < 0.0f) *hue += 360.0f;
+}
+
+static SDL_Texture *make_color_texture(SDL_Renderer *renderer,
+                                       int width, int height, float hue,
+                                       bool hue_bar)
+{
+    SDL_Surface *surface = SDL_CreateSurface(width, height,
+                                             SDL_PIXELFORMAT_ARGB8888);
+    SDL_Texture *texture;
+    int x, y;
+    if (!surface) return NULL;
+    for (y = 0; y < height; ++y) {
+        uint32_t *row = (uint32_t *)((uint8_t *)surface->pixels
+                                     + y * surface->pitch);
+        for (x = 0; x < width; ++x) {
+            float pixel_hue = hue_bar
+                ? (float)y * 360.0f / (float)(height - 1) : hue;
+            float saturation = hue_bar ? 1.0f
+                : (float)x / (float)(width - 1);
+            float value = hue_bar ? 1.0f
+                : 1.0f - (float)y / (float)(height - 1);
+            int r, g, b;
+            hsv_to_rgb(pixel_hue, saturation, value, &r, &g, &b);
+            row[x] = 0xFF000000u | (uint32_t)r << 16
+                | (uint32_t)g << 8 | (uint32_t)b;
+        }
+    }
+    texture = SDL_CreateTextureFromSurface(renderer, surface);
+    SDL_DestroySurface(surface);
+    return texture;
+}
+
 static size_t build_fields(CountryCreatorUI *ui, CountryField fields[11])
 {
     float left = 32.0f, field_x = 218.0f, y = 94.0f;
@@ -76,6 +153,30 @@ static void sync_numeric(CountryCreatorUI *ui)
     }
 }
 
+static void apply_picker_color(CountryCreatorUI *ui)
+{
+    int r, g, b;
+    hsv_to_rgb(ui->picker_hue, ui->picker_saturation, ui->picker_value,
+               &r, &g, &b);
+    ui->request.color[0] = r;
+    ui->request.color[1] = g;
+    ui->request.color[2] = b;
+    snprintf(ui->colors[0], sizeof(ui->colors[0]), "%d", r);
+    snprintf(ui->colors[1], sizeof(ui->colors[1]), "%d", g);
+    snprintf(ui->colors[2], sizeof(ui->colors[2]), "%d", b);
+}
+
+static void open_color_picker(CountryCreatorUI *ui)
+{
+    sync_numeric(ui);
+    rgb_to_hsv(ui->request.color[0], ui->request.color[1],
+               ui->request.color[2], &ui->picker_hue,
+               &ui->picker_saturation, &ui->picker_value);
+    ui->color_picker_open = true;
+    ui->picker_drag = 0;
+    ui->spectrum_texture_hue = -1.0f;
+}
+
 void country_ui_init(CountryCreatorUI *ui)
 {
     int i;
@@ -89,8 +190,17 @@ void country_ui_init(CountryCreatorUI *ui)
                  ui->request.color_ui[i]);
     }
     ui->active_field = -1;
+    ui->spectrum_texture_hue = -1.0f;
     snprintf(ui->status, sizeof(ui->status),
              "Remplis les paramètres du nouveau pays.");
+}
+
+void country_ui_free(CountryCreatorUI *ui)
+{
+    if (ui->spectrum_texture) SDL_DestroyTexture(ui->spectrum_texture);
+    if (ui->hue_texture) SDL_DestroyTexture(ui->hue_texture);
+    ui->spectrum_texture = NULL;
+    ui->hue_texture = NULL;
 }
 
 void country_ui_reload(CountryCreatorUI *ui)
@@ -113,6 +223,51 @@ static void render_field(CountryCreatorUI *ui, SDL_Renderer *renderer,
          ui->active_field == index ? 136 : 52);
     draw_text(renderer, font_small, field->value,
               field->rect.x + 11, field->rect.y + 9, white);
+}
+
+static void render_color_picker(CountryCreatorUI *ui, SDL_Renderer *renderer,
+                                TTF_Font *font, TTF_Font *font_small)
+{
+    SDL_FRect panel = {PICKER_X, PICKER_Y, 360, 338};
+    SDL_FRect spectrum = {SPECTRUM_X, SPECTRUM_Y,
+                          SPECTRUM_SIZE, SPECTRUM_SIZE};
+    SDL_FRect hue = {HUE_X, HUE_Y, HUE_WIDTH, HUE_HEIGHT};
+    SDL_FRect close = {1048, 118, 22, 22};
+    SDL_Color white = {235, 239, 247, 255};
+    char rgb[64];
+    if (!ui->hue_texture)
+        ui->hue_texture = make_color_texture(renderer, 28, 256, 0, true);
+    if (!ui->spectrum_texture
+        || fabsf(ui->spectrum_texture_hue - ui->picker_hue) > 0.05f) {
+        if (ui->spectrum_texture) SDL_DestroyTexture(ui->spectrum_texture);
+        ui->spectrum_texture = make_color_texture(renderer, 256, 256,
+                                                  ui->picker_hue, false);
+        ui->spectrum_texture_hue = ui->picker_hue;
+    }
+    fill(renderer, panel, 23, 29, 40);
+    draw_text(renderer, font, "Choisir la couleur", 744, 120, white);
+    fill(renderer, close, 65, 74, 91);
+    draw_text(renderer, font_small, "X", 1055, 121, white);
+    if (ui->spectrum_texture)
+        SDL_RenderTexture(renderer, ui->spectrum_texture, NULL, &spectrum);
+    if (ui->hue_texture)
+        SDL_RenderTexture(renderer, ui->hue_texture, NULL, &hue);
+    SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+    {
+        SDL_FRect cursor = {
+            SPECTRUM_X + ui->picker_saturation * SPECTRUM_SIZE - 5,
+            SPECTRUM_Y + (1.0f - ui->picker_value) * SPECTRUM_SIZE - 5,
+            10, 10
+        };
+        SDL_RenderRect(renderer, &cursor);
+        cursor = (SDL_FRect){HUE_X - 3,
+            HUE_Y + ui->picker_hue / 360.0f * HUE_HEIGHT - 2,
+            HUE_WIDTH + 6, 4};
+        SDL_RenderRect(renderer, &cursor);
+    }
+    snprintf(rgb, sizeof(rgb), "RGB  %s  %s  %s",
+             ui->colors[0], ui->colors[1], ui->colors[2]);
+    draw_text(renderer, font_small, rgb, 744, 426, white);
 }
 
 void country_ui_render(CountryCreatorUI *ui, SDL_Window *window,
@@ -195,6 +350,63 @@ void country_ui_render(CountryCreatorUI *ui, SDL_Window *window,
     draw_text(renderer, font_small, ui->status, 32, 770,
               strstr(ui->status, "Erreur") || strstr(ui->status, "existe")
                   || strstr(ui->status, "Impossible") ? error : muted);
+    if (ui->color_picker_open)
+        render_color_picker(ui, renderer, font, font_small);
+}
+
+static void update_picker_from_mouse(CountryCreatorUI *ui,
+                                     float x, float y, int target)
+{
+    if (target == 1) {
+        ui->picker_saturation = SDL_clamp(
+            (x - SPECTRUM_X) / SPECTRUM_SIZE, 0.0f, 1.0f);
+        ui->picker_value = 1.0f - SDL_clamp(
+            (y - SPECTRUM_Y) / SPECTRUM_SIZE, 0.0f, 1.0f);
+    } else if (target == 2) {
+        ui->picker_hue = SDL_clamp(
+            (y - HUE_Y) / HUE_HEIGHT, 0.0f, 1.0f) * 359.999f;
+    }
+    apply_picker_color(ui);
+}
+
+static bool handle_color_picker_event(CountryCreatorUI *ui,
+                                      const SDL_Event *event)
+{
+    SDL_FRect spectrum = {SPECTRUM_X, SPECTRUM_Y,
+                          SPECTRUM_SIZE, SPECTRUM_SIZE};
+    SDL_FRect hue = {HUE_X, HUE_Y, HUE_WIDTH, HUE_HEIGHT};
+    SDL_FRect close = {1048, 118, 22, 22};
+    if (event->type == SDL_EVENT_KEY_DOWN
+        && event->key.key == SDLK_ESCAPE) {
+        ui->color_picker_open = false;
+        ui->picker_drag = 0;
+        return true;
+    }
+    if (event->type == SDL_EVENT_MOUSE_BUTTON_DOWN
+        && event->button.button == SDL_BUTTON_LEFT) {
+        if (inside(event->button.x, event->button.y, &close)) {
+            ui->color_picker_open = false;
+            ui->picker_drag = 0;
+        } else if (inside(event->button.x, event->button.y, &spectrum)) {
+            ui->picker_drag = 1;
+            update_picker_from_mouse(ui, event->button.x, event->button.y, 1);
+        } else if (inside(event->button.x, event->button.y, &hue)) {
+            ui->picker_drag = 2;
+            update_picker_from_mouse(ui, event->button.x, event->button.y, 2);
+        }
+        return true;
+    }
+    if (event->type == SDL_EVENT_MOUSE_MOTION && ui->picker_drag) {
+        update_picker_from_mouse(ui, event->motion.x, event->motion.y,
+                                 ui->picker_drag);
+        return true;
+    }
+    if (event->type == SDL_EVENT_MOUSE_BUTTON_UP
+        && event->button.button == SDL_BUTTON_LEFT) {
+        ui->picker_drag = 0;
+        return true;
+    }
+    return true;
 }
 
 static char *active_target(CountryCreatorUI *ui,
@@ -240,6 +452,9 @@ bool country_ui_handle_event(CountryCreatorUI *ui, SDL_Window *window,
     size_t field_count = build_fields(ui, fields);
     SDL_FRect checkbox = {32, 716, 22, 22};
     SDL_FRect create = {520, 704, 168, 42};
+    SDL_FRect swatch = {490, 538, 92, 88};
+    if (ui->color_picker_open)
+        return handle_color_picker_event(ui, event);
     if (event->type == SDL_EVENT_MOUSE_BUTTON_DOWN
         && event->button.button == SDL_BUTTON_LEFT) {
         size_t i;
@@ -276,6 +491,10 @@ bool country_ui_handle_event(CountryCreatorUI *ui, SDL_Window *window,
                 !ui->request.create_placeholder_flags;
         if (inside(event->button.x, event->button.y, &create))
             execute_creation(ui, game_root, mod_root);
+        if (inside(event->button.x, event->button.y, &swatch)) {
+            open_color_picker(ui);
+            SDL_StopTextInput(window);
+        }
         if (ui->active_field >= 0) SDL_StartTextInput(window);
         else SDL_StopTextInput(window);
         return true;

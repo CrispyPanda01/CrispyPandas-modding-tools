@@ -34,12 +34,21 @@ typedef struct {
 } Hoi4Province;
 
 typedef struct {
+    int province_id;
+    int value;
+    int map_x;
+    int map_y;
+} Hoi4VictoryPoint;
+
+typedef struct {
     int id;
     char name[160];
     char owner[8];
     char source[CP_PATH_MAX];
     int *provinces;
     size_t province_count;
+    Hoi4VictoryPoint *victory_points;
+    size_t victory_point_count;
     int min_x, min_y, max_x, max_y;
 } Hoi4State;
 

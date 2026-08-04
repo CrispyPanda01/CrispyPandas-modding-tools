@@ -34,6 +34,12 @@ bool province_state_create_execute(const Hoi4Map *map,
                                    const uint8_t *selected_provinces,
                                    ProvinceStateCreateResult *result);
 
+bool province_state_create_execute_named(const Hoi4Map *map,
+                                         const char *mod_root,
+                                         const uint8_t *selected_provinces,
+                                         const char *state_name,
+                                         ProvinceStateCreateResult *result);
+
 bool province_transfer_replace_id_block(const char *input, const char *block_name,
                                         const int *ids, size_t id_count,
                                         char **output,
